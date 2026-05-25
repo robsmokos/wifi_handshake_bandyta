@@ -8,7 +8,7 @@ class Database:
         self.db_path = db_path
         self.pending_updates = {}
         self.last_flush = time.time()
-        self.flush_interval = 15
+        self.flush_interval = 30  # Większy interval by nie męczyć karty SD
         self.lock = asyncio.Lock()
 
     async def init_db(self):
@@ -155,23 +155,50 @@ class Database:
                     ))
                 await conn.commit()
         except Exception as e:
-            # Prawidłowa obsługa błędów, by błąd DB nie powalił aplikacji
+            # Prawidłowa obsługa błędów - przywróć dane do pending by nie tracić
             print(f"\n[!] Błąd zapisu bazy: {e}")
+            async with self.lock:
+                for item in updates:
+                    bssid = item['bssid']
+                    if bssid not in self.pending_updates:
+                        self.pending_updates[bssid] = item
 
     async def get_stats(self):
+        """Zwraca (total_ap, captured_ap) uwzględniając niezapisane dane z pamięci."""
         try:
             async with aiosqlite.connect(self.db_path) as conn:
                 async with conn.execute("SELECT COUNT(*) FROM handshakes") as cursor:
                     db_total = (await cursor.fetchone())[0]
                 async with conn.execute("SELECT COUNT(*) FROM handshakes WHERE status IN ('przechwycono', 'pmkid_przechwycono')") as cursor:
                     db_captured = (await cursor.fetchone())[0]
+            
+            # Dodaj pozycje z pamięci które nie trafia jeszcze do DB
+            async with self.lock:
+                pending_bssids = set(self.pending_updates.keys())
+            
+            # Pobierz bssidy które są w DB (by nie liczyć dwa razy)
+            if pending_bssids:
+                async with aiosqlite.connect(self.db_path) as conn:
+                    placeholders = ','.join('?' * len(pending_bssids))
+                    async with conn.execute(f"SELECT bssid FROM handshakes WHERE bssid IN ({placeholders})", list(pending_bssids)) as cursor:
+                        existing_in_db = {row[0] for row in await cursor.fetchall()}
+                new_only = pending_bssids - existing_in_db
+                db_total += len(new_only)
+                # Zlicz przechwycone z pending których nie ma w DB
+                async with self.lock:
+                    for bssid in new_only:
+                        ap = self.pending_updates.get(bssid, {})
+                        if ap.get('status') in ('przechwycono', 'pmkid_przechwycono'):
+                            db_captured += 1
+            
             return db_total, db_captured
         except Exception:
             return 0, 0
 
     async def get_top_aps(self, limit=10):
-        await self.check_flush()
+        """Zwraca top AP z bazy + pending_updates w pamięci."""
         try:
+            # Pobierz dane z dysku
             async with aiosqlite.connect(self.db_path) as db:
                 db.row_factory = aiosqlite.Row
                 query = """
@@ -185,6 +212,28 @@ class Database:
                 """
                 async with db.execute(query, (limit,)) as cursor:
                     rows = await cursor.fetchall()
-                    return [dict(row) for row in rows]
+                    db_results = {r['bssid']: dict(r) for r in rows}
+
+            # Scal z pending_updates (nowe lub zaktualizowane wpisy z RAM)
+            async with self.lock:
+                for bssid, ap in self.pending_updates.items():
+                    db_results[bssid] = {
+                        'bssid': bssid,
+                        'essid': ap.get('essid'),
+                        'liczba_atakow_deauth': ap.get('liczba_atakow_deauth', 0),
+                        'liczba_atakow_pmkid': ap.get('liczba_atakow_pmkid', 0),
+                        'status': ap.get('status', 'nowy'),
+                        'last_attacked_at': ap.get('last_attacked_at', 0),
+                    }
+
+            # Sortuj: przechwycone na dół, potem najczęściej atakowane na górę
+            sorted_aps = sorted(
+                db_results.values(),
+                key=lambda x: (
+                    1 if 'przechwycono' in x.get('status', '') else 0,
+                    -x.get('last_attacked_at', 0)
+                )
+            )
+            return sorted_aps[:limit]
         except Exception:
             return []

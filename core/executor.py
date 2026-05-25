@@ -20,7 +20,6 @@ class Executor:
         """Konsument Kolejki Ataków (Attack Queue)"""
         while self.running:
             try:
-                # Blokuje się na kolejce, z wymuszonym timeoutem (Fail-safe)
                 payload = await asyncio.wait_for(self.attack_queue.get(), timeout=5)
                 
                 bssid = payload['bssid']
@@ -29,13 +28,16 @@ class Executor:
                 if bssid in self.brain.in_attack_queue:
                     self.brain.in_attack_queue.remove(bssid)
                     
-                # TTL Check (Zabezpieczenie przed atakiem na router sprzed 20 minut)
-                if time.time() - payload['timestamp'] > self.ttl:
+                try:
+                    # TTL Check
+                    if time.time() - payload['timestamp'] > self.ttl:
+                        continue  # Pomijamy, ale nie zamykamy wątku!
+                    await self.execute_attack(payload)
+                except Exception as e:
+                    logging.error(f"Executor execute_attack Error: {e}")
+                finally:
                     self.attack_queue.task_done()
-                    continue
                     
-                await self.execute_attack(payload)
-                self.attack_queue.task_done()
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
@@ -69,6 +71,11 @@ class Executor:
             for _ in range(3):
                 await self.api.send_assoc(bssid)
                 await asyncio.sleep(0.5)
+        else:
+            # Brak klienta przy deauth - anuluj atak
+            logging.warning(f"Executor: Deauth bez klienta dla {bssid}, pomijam.")
+            self.shared_state['action'] = "Skanowanie eteru..."
+            return
 
         # Aktualizacja statusu
         await self.db.mark_attack(bssid, attack_type)

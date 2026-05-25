@@ -25,8 +25,8 @@ class Validator:
         # BSSID bez dwukropków (hc22000 używa płaskiego formatu mac, czasami małe litery)
         bssid_clean = bssid.replace(":", "").lower()
             
+        proc = None
         try:
-            # -o nakazuje wygenerowanie pliku z hashami do łamania (np. w hashcat)
             proc = await asyncio.create_subprocess_exec(
                 "hcxpcapngtool", "-o", self.hashes_file, self.pcap_file,
                 stdout=asyncio.subprocess.PIPE,
@@ -37,17 +37,14 @@ class Validator:
             await asyncio.wait_for(proc.communicate(), timeout=15)
             
             is_valid = False
-            status = 'niekompletny'
             
             # Weryfikacja bezpośrednio w pliku z hashami
             if os.path.exists(self.hashes_file):
-                with open(self.hashes_file, 'r') as f:
+                with open(self.hashes_file, 'r', errors='ignore') as f:
                     content = f.read().lower()
-                    # hc22000 struktura: SIGNATURE*MAC_AP*MAC_CLIENT*ESSID
-                    # Wystarczy sprawdzić czy MAC naszego celu znajduje się w pliku hashów.
                     if bssid_clean in content:
                         is_valid = True
-                
+            
             if is_valid:
                 status = 'przechwycono' if attack_type == 'deauth' else 'pmkid_przechwycono'
                 
@@ -78,8 +75,11 @@ class Validator:
                         self.shared_state['action'] = "Skanowanie eteru..."
             
         except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except: pass
+            if proc is not None:
+                try:
+                    proc.kill()
+                    await proc.wait()  # Zapobiega zombie-procesowi
+                except Exception:
+                    pass
         except Exception as e:
-            print(f"Validator Error: {e}")
+            sys.stderr.write(f"Validator Error: {e}\n")

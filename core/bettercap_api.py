@@ -2,6 +2,7 @@ import asyncio
 import aiohttp
 import json
 import logging
+import time
 
 class BettercapAPI:
     def __init__(self, event_queue, host="127.0.0.1", port=8081, username="", password=""):
@@ -15,9 +16,9 @@ class BettercapAPI:
         """Wysyła pojedynczą komendę do sesji Bettercapa z wymuszonym Timeoutem."""
         payload = {"cmd": cmd}
         try:
-            async with aiohttp.ClientSession(auth=self.auth) as session:
-                # Obowiązkowy timeout na akcję (zabezpieczenie przed zwisem HTTP)
-                async with session.post(self.url_session, json=payload, timeout=5) as response:
+            timeout = aiohttp.ClientTimeout(total=5)
+            async with aiohttp.ClientSession(auth=self.auth, timeout=timeout) as session:
+                async with session.post(self.url_session, json=payload) as response:
                     return response.status == 200
         except Exception as e:
             # W środowisku testowym może brakować podłączonego serwera, uciszamy logging
@@ -37,7 +38,6 @@ class BettercapAPI:
 
     async def event_stream_listener(self):
         """Asynchronicznie odpytuje REST API Bettercapa i natychmiast czyści jego bufor."""
-        import time
         backoff = 1
         last_session_pull = 0
         while self.running:
@@ -45,8 +45,9 @@ class BettercapAPI:
                 now = time.time()
                 # Co 10 sekund zaciągnij PEŁNĄ listę widocznych sieci, by odświeżyć ich siłę sygnału i klientów
                 if now - last_session_pull > 10:
-                    async with aiohttp.ClientSession(auth=self.auth) as session:
-                        async with session.get(self.url_session, timeout=5) as response:
+                    timeout = aiohttp.ClientTimeout(total=5)
+                    async with aiohttp.ClientSession(auth=self.auth, timeout=timeout) as session:
+                        async with session.get(self.url_session) as response:
                             if response.status == 200:
                                 data = await response.json()
                                 aps = data.get('wifi', {}).get('aps', [])
@@ -58,11 +59,12 @@ class BettercapAPI:
                                 last_session_pull = now
 
                 # Pobieranie szybkich eventów z bufora
-                async with aiohttp.ClientSession(auth=self.auth) as session:
-                    async with session.get(self.url_events, timeout=5) as response:
+                timeout = aiohttp.ClientTimeout(total=5)
+                async with aiohttp.ClientSession(auth=self.auth, timeout=timeout) as session:
+                    async with session.get(self.url_events) as response:
                         backoff = 1
                         text = await response.text()
-                        if text:
+                        if text.strip():
                             try:
                                 events = json.loads(text)
                                 for event in events:
@@ -71,9 +73,10 @@ class BettercapAPI:
                                         try:
                                             await asyncio.wait_for(self.event_queue.put(event), timeout=2)
                                         except asyncio.TimeoutError:
-                                            pass # Kolejka pełna
-                                # Po skonsumowaniu czyścimy bufor API by nie powielać eventów
-                                await self.run_command("events.clear")
+                                            pass
+                                # Czyść bufor tylko jeśli były jakieś eventy
+                                if events:
+                                    await self.run_command("events.clear")
                             except json.JSONDecodeError:
                                 pass
                 await asyncio.sleep(1) # Polling 1s

@@ -78,17 +78,30 @@ class Brain:
         # Główny algorytm (RSSI jest ujemne!)
         score = (client_count * 5) + rssi + bonus_nowej_sieci - (failures * 10) - cooldown_penalty
         
-        # Ignoruj kompletnie tragiczne wyniki (wypadnie z obiegu na dłuższą chwilę)
-        if score < -150: return
+        # Ignoruj kompletnie tragiczne wyniki
+        # Próg -200 zamiast -150 by nie odcinać słabych sieci bez historii
+        if score < -200: return
 
         attack_type = None
         target_client = None
         
         if client_count > 0:
             attack_type = "deauth"
-            if isinstance(clients, dict): target_client = list(clients.keys())[0]
-            elif isinstance(clients, list) and isinstance(clients[0], dict): target_client = clients[0].get('mac')
-            elif isinstance(clients, list): target_client = str(clients[0])
+            target_client = None
+            if isinstance(clients, dict) and clients:
+                target_client = list(clients.keys())[0]
+            elif isinstance(clients, list) and len(clients) > 0:
+                c = clients[0]
+                if isinstance(c, dict):
+                    target_client = c.get('mac')
+                else:
+                    target_client = str(c)
+            # Deauth bez klienta jest bezcelowy - przejdź do PMKID
+            if not target_client:
+                if db_info.get('liczba_atakow_pmkid', 0) < 3:
+                    attack_type = "pmkid"
+                else:
+                    return
         else:
             if db_info.get('liczba_atakow_pmkid', 0) < 3:
                 attack_type = "pmkid"
