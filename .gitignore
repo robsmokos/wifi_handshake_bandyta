@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+handshakes.db
+handshakes/
+*.pcap
+*.hc22000
+error.log
+bettercap_config.cap
