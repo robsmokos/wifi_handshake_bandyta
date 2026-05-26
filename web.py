@@ -175,11 +175,11 @@ class WebServer:
         </span>
         <span class="stat-sep">|</span>
         <span class="stat-group">
-            <strong style="color: #1f940b;">CPU:</strong> <span id="stat-cpu" style="color: #00ddff; font-weight: bold;">0.0%</span>
+            <strong style="color: #1f940b;">CPU:</strong> <span id="stat-cpu" style="color: #ffffff; font-weight: bold;">0.0%</span>
         </span>
         <span class="stat-sep">|</span>
         <span class="stat-group">
-            <strong style="color: #1f940b;">RAM:</strong> <span id="stat-ram" style="color: #00ddff; font-weight: bold;">0.0%</span>
+            <strong style="color: #1f940b;">RAM:</strong> <span id="stat-ram" style="color: #ffffff; font-weight: bold;">0.0%</span>
         </span>
         <span class="stat-sep">|</span>
         <span id="stat-datetime" style="color: #666666; font-family: monospace; white-space: nowrap;">-</span>
@@ -425,9 +425,8 @@ class WebServer:
 
         statusFilter.addEventListener('change', fetchAPs);
 
-        // Spinner animation setup - 4 backslashes in Python source code compiles to 2 backslashes in served HTML,
-        // which JavaScript compiles to a single backslash '\', guaranteeing exactly 3 characters width and no shifting!
-        let spinnerFrames = ['[|]', '[/]', '[-]', '[\\\\]'];
+        // Spinner animation setup - Quadrant block spinner frames, pure ASCII text, 100% layout stable
+        let spinnerFrames = ['[▖]', '[▘]', '[▝]', '[▗]'];
         let spinnerIndex = 0;
         const statusSpinnerElement = document.getElementById('status-spinner');
         
