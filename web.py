@@ -74,20 +74,14 @@ class WebServer:
             to { opacity: 1; transform: scale(1.15); }
         }
         .status-spinner {
-            width: 10px;
-            height: 10px;
-            border: 2px solid rgba(0, 255, 0, 0.2);
-            border-top: 2px solid #00ff00;
-            border-radius: 50%;
             display: inline-block;
-            animation: spin-loader 0.8s linear infinite;
-            margin-right: 5px;
+            font-family: monospace;
+            font-weight: bold;
+            margin-right: 3px;
+            width: 3ch;
+            text-align: center;
             flex-shrink: 0;
-            transition: border-color 0.3s ease;
-        }
-        @keyframes spin-loader {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+            white-space: nowrap;
         }
         .stat-group {
             display: inline-flex;
@@ -164,7 +158,7 @@ class WebServer:
         <span class="stat-group">
             <strong>STATUS:</strong>
             <span id="status-dot" class="status-dot pulse-green"></span>
-            <span id="status-spinner" class="status-spinner"></span>
+            <span id="status-spinner" class="status-spinner">[/]</span>
             <span id="pwn-status" style="color: #00ff00; font-weight: bold;">Inicjalizacja...</span>
         </span>
         <span class="stat-sep">|</span>
@@ -276,23 +270,19 @@ class WebServer:
                     if (action.includes('ATAK') || action.includes('Wysyłanie') || action.includes('Deauth') || action.includes('PMKID')) {
                         pwnStatusSpan.style.color = '#ffaa00';
                         statusDot.className = 'status-dot pulse-yellow';
-                        statusSpinner.style.borderTopColor = '#ffaa00';
-                        statusSpinner.style.borderColor = 'rgba(255, 170, 0, 0.2)';
+                        statusSpinner.style.color = '#ffaa00';
                     } else if (action.includes('Błąd') || action.includes('Error') || action.includes('nie powiodło')) {
                         pwnStatusSpan.style.color = '#ff3333';
                         statusDot.className = 'status-dot pulse-red';
-                        statusSpinner.style.borderTopColor = '#ff3333';
-                        statusSpinner.style.borderColor = 'rgba(255, 51, 51, 0.2)';
+                        statusSpinner.style.color = '#ff3333';
                     } else if (action.includes('ZŁAPANO') || action.includes('SUKCES') || action.includes('przechwycono')) {
                         pwnStatusSpan.style.color = '#ffffff';
                         statusDot.className = 'status-dot pulse-white';
-                        statusSpinner.style.borderTopColor = '#ffffff';
-                        statusSpinner.style.borderColor = 'rgba(255, 255, 255, 0.2)';
+                        statusSpinner.style.color = '#ffffff';
                     } else {
                         pwnStatusSpan.style.color = '#00ff00';
                         statusDot.className = 'status-dot pulse-green';
-                        statusSpinner.style.borderTopColor = '#00ff00';
-                        statusSpinner.style.borderColor = 'rgba(0, 255, 0, 0.2)';
+                        statusSpinner.style.color = '#00ff00';
                     }
                 }
 
@@ -314,8 +304,7 @@ class WebServer:
                     statusDot.className = 'status-dot pulse-red';
                 }
                 if (statusSpinner) {
-                    statusSpinner.style.borderTopColor = '#ff3333';
-                    statusSpinner.style.borderColor = 'rgba(255, 51, 51, 0.2)';
+                    statusSpinner.style.color = '#ff3333';
                 }
                 const pwnFace = document.getElementById('pwn-face');
                 const pwnFaceLbl = document.getElementById('pwn-face-lbl');
@@ -435,6 +424,19 @@ class WebServer:
         });
 
         statusFilter.addEventListener('change', fetchAPs);
+
+        // Spinner animation setup - 4 backslashes in Python source code compiles to 2 backslashes in served HTML,
+        // which JavaScript compiles to a single backslash '\', guaranteeing exactly 3 characters width and no shifting!
+        let spinnerFrames = ['[|]', '[/]', '[-]', '[\\\\]'];
+        let spinnerIndex = 0;
+        const statusSpinnerElement = document.getElementById('status-spinner');
+        
+        setInterval(() => {
+            if (statusSpinnerElement) {
+                statusSpinnerElement.innerText = spinnerFrames[spinnerIndex];
+                spinnerIndex = (spinnerIndex + 1) % spinnerFrames.length;
+            }
+        }, 150);
 
         fetchStats();
         fetchAPs();
