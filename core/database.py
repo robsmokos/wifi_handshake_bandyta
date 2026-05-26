@@ -284,7 +284,7 @@ class Database:
             conn.row_factory = aiosqlite.Row
             bssids = [ap['bssid'] for ap in active_list]
             placeholders = ','.join('?' * len(bssids))
-            sql = f"SELECT bssid, status, liczba_atakow_deauth, liczba_atakow_pmkid FROM handshakes WHERE bssid IN ({placeholders})"
+            sql = f"SELECT bssid, status, liczba_atakow_deauth, liczba_atakow_pmkid, last_attacked_at FROM handshakes WHERE bssid IN ({placeholders})"
             
             db_status = {}
             try:
@@ -300,6 +300,19 @@ class Database:
                 ap['status'] = status_info.get('status', 'nowy')
                 ap['liczba_atakow_deauth'] = status_info.get('liczba_atakow_deauth', 0)
                 ap['liczba_atakow_pmkid'] = status_info.get('liczba_atakow_pmkid', 0)
+                
+                # Dynamic Brain Score Calculation matching brain.py
+                failures = ap['liczba_atakow_deauth'] + ap['liczba_atakow_pmkid']
+                bonus_nowej_sieci = 20 if failures == 0 else 0
+                
+                last_attack = status_info.get('last_attacked_at', 0.0) or 0.0
+                time_since_attack = time.time() - last_attack
+                cooldown_penalty = 0.0
+                if last_attack > 0.0 and time_since_attack < 180.0:
+                    cooldown_penalty = (180.0 - time_since_attack)
+                
+                score = (ap['client_count'] * 5) + ap['rssi'] + bonus_nowej_sieci - (failures * 10) - cooldown_penalty
+                ap['score'] = round(score, 1)
                 
                 bssid_file_name = ap['bssid'].replace(":", "-")
                 essid_safe = "".join([c for c in str(ap['essid']) if c.isalnum() or c in ('_', '-')]).strip()

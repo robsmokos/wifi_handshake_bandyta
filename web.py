@@ -170,6 +170,7 @@ class WebServer:
                         <tr>
                             <th style="width: 40px;">#</th>
                             <th>SIGNAL</th>
+                            <th>PRIORITY</th>
                             <th>BSSID</th>
                             <th>ESSID</th>
                             <th>CH</th>
@@ -197,7 +198,7 @@ class WebServer:
                 networksTbody.innerHTML = '';
 
                 if (aps.length === 0) {
-                    const colSpan = currentView === 'active' ? 10 : 7;
+                    const colSpan = currentView === 'active' ? 11 : 7;
                     networksTbody.innerHTML = `<tr><td colspan="${colSpan}">-- Brak wyników wyszukiwania --</td></tr>`;
                     return;
                 }
@@ -227,10 +228,24 @@ class WebServer:
                     else if (ap.rssi >= -90) rssiColor = "#ffaa00";
                     else rssiColor = "#ff5555";
 
+                    // Color code brain scores
+                    let scoreColor = "var(--terminal-green-dim)";
+                    if (isCaptured) {
+                        scoreColor = "#888";
+                    } else if (ap.score >= -100) {
+                        scoreColor = "#ffffff";
+                    } else if (ap.score >= -150) {
+                        scoreColor = "var(--terminal-green)";
+                    }
+
+                    // Display 'CRACKED' instead of numeric score for captured handshakes for neatness
+                    const scoreText = isCaptured ? "CRACKED" : ap.score;
+
                     if (currentView === 'active') {
                         tr.innerHTML = `
                             <td style="color: #888;">${idx + 1}</td>
                             <td style="font-weight: bold; color: ${rssiColor};">${ap.rssi} dBm</td>
+                            <td style="font-weight: bold; color: ${scoreColor};">[PTS: ${scoreText}]</td>
                             <td>${ap.bssid}</td>
                             <td class="${statusClass}">${ap.essid || '<ukryty>'}</td>
                             <td>${ap.channel || '?'}</td>
