@@ -170,7 +170,7 @@ class WebServer:
                         <tr>
                             <th style="width: 40px;">#</th>
                             <th>SIGNAL</th>
-                            <th>PRIORITY</th>
+                            <th>BRAIN</th>
                             <th>BSSID</th>
                             <th>ESSID</th>
                             <th>CH</th>
@@ -245,7 +245,7 @@ class WebServer:
                         tr.innerHTML = `
                             <td style="color: #888;">${idx + 1}</td>
                             <td style="font-weight: bold; color: ${rssiColor};">${ap.rssi} dBm</td>
-                            <td style="font-weight: bold; color: ${scoreColor};">[PTS: ${scoreText}]</td>
+                            <td style="font-weight: bold; color: ${scoreColor};">[${scoreText}]</td>
                             <td>${ap.bssid}</td>
                             <td class="${statusClass}">${ap.essid || '<ukryty>'}</td>
                             <td>${ap.channel || '?'}</td>
