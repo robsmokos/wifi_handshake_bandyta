@@ -31,10 +31,8 @@ class WebServer:
             padding-bottom: 5px;
         }
         .stats-box {
-            border: 1px solid #00ff00;
-            padding: 10px;
+            padding: 5px 0px;
             margin-bottom: 15px;
-            background-color: #000;
         }
         .control-panel {
             margin-bottom: 15px;
