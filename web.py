@@ -173,6 +173,7 @@ class WebServer:
                             <th>BRAIN</th>
                             <th>BSSID</th>
                             <th>ESSID</th>
+                            <th>PRODUCENT</th>
                             <th>CH</th>
                             <th>ENC</th>
                             <th>CLI</th>
@@ -198,7 +199,7 @@ class WebServer:
                 networksTbody.innerHTML = '';
 
                 if (aps.length === 0) {
-                    const colSpan = currentView === 'active' ? 11 : 7;
+                    const colSpan = currentView === 'active' ? 12 : 7;
                     networksTbody.innerHTML = `<tr><td colspan="${colSpan}">-- Brak wyników wyszukiwania --</td></tr>`;
                     return;
                 }
@@ -248,6 +249,7 @@ class WebServer:
                             <td style="font-weight: bold; color: ${scoreColor};">[${scoreText}]</td>
                             <td>${ap.bssid}</td>
                             <td class="${statusClass}">${ap.essid || '<ukryty>'}</td>
+                            <td style="color: var(--terminal-green-dim); font-size: 0.85rem;">${ap.vendor || 'UNKNOWN'}</td>
                             <td>${ap.channel || '?'}</td>
                             <td>${ap.encryption || 'WPA2'}</td>
                             <td style="font-weight: ${ap.client_count > 0 ? 'bold' : 'normal'}; color: ${ap.client_count > 0 ? '#ffffff' : 'inherit'};">${ap.client_count}</td>
@@ -270,7 +272,7 @@ class WebServer:
                 });
             } catch (err) {
                 console.error(err);
-                const colSpan = currentView === 'active' ? 10 : 7;
+                const colSpan = currentView === 'active' ? 12 : 7;
                 networksTbody.innerHTML = `<tr><td colspan="${colSpan}" style="color: red;">BŁĄD ZAPISU BAZY / I/O</td></tr>`;
             }
         }
