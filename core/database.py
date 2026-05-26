@@ -1,12 +1,14 @@
 import asyncio
 import aiosqlite
 import time
+import os
 from datetime import datetime
 
 class Database:
     def __init__(self, db_path="handshakes.db"):
         self.db_path = db_path
         self.pending_updates = {}
+        self.active_aps = {}
         self.last_flush = time.time()
         self.flush_interval = 30  # Większy interval by nie męczyć karty SD
         self.lock = asyncio.Lock()
@@ -71,7 +73,12 @@ class Database:
                     
             ap = self.pending_updates[bssid]
             ap['last_seen'] = now_str
-            if essid and ap['essid'] != essid: ap['essid'] = essid
+            if essid and ap['essid'] != essid:
+                # Nie nadpisujemy znanej nazwy sieci ogólnym znacznikiem ukrycia
+                is_current_hidden = ap['essid'] in (None, "", "<ukryty>", "<ukryte>", "ukryta")
+                is_new_hidden = essid in (None, "", "<ukryty>", "<ukryte>", "ukryta")
+                if is_current_hidden or not is_new_hidden:
+                    ap['essid'] = essid
             if vendor and ap['vendor'] != vendor: ap['vendor'] = vendor
             if gps_lat is not None: ap['gps_lat'] = gps_lat
             if gps_lon is not None: ap['gps_lon'] = gps_lon
@@ -237,3 +244,75 @@ class Database:
             return sorted_aps[:limit]
         except Exception:
             return []
+
+    async def update_active_ap(self, bssid, essid, vendor, rssi, channel, encryption, clients):
+        async with self.lock:
+            client_count = len(clients) if isinstance(clients, (list, dict)) else 0
+            
+            enc_str = ""
+            if isinstance(encryption, list):
+                enc_str = ", ".join(encryption)
+            else:
+                enc_str = str(encryption)
+                
+            self.active_aps[bssid] = {
+                'bssid': bssid,
+                'essid': essid,
+                'vendor': vendor,
+                'rssi': rssi,
+                'channel': channel,
+                'encryption': enc_str,
+                'client_count': client_count,
+                'last_seen_time': time.time()
+            }
+
+    async def get_active_aps(self):
+        async with self.lock:
+            now = time.time()
+            self.active_aps = {
+                bssid: ap for bssid, ap in self.active_aps.items()
+                if now - ap['last_seen_time'] <= 60
+            }
+            return list(self.active_aps.values())
+
+    async def get_active_aps_with_status(self):
+        active_list = await self.get_active_aps()
+        if not active_list:
+            return []
+            
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            bssids = [ap['bssid'] for ap in active_list]
+            placeholders = ','.join('?' * len(bssids))
+            sql = f"SELECT bssid, status, liczba_atakow_deauth, liczba_atakow_pmkid FROM handshakes WHERE bssid IN ({placeholders})"
+            
+            db_status = {}
+            try:
+                async with conn.execute(sql, bssids) as cursor:
+                    rows = await cursor.fetchall()
+                    for row in rows:
+                        db_status[row['bssid']] = dict(row)
+            except Exception:
+                pass
+                
+            for ap in active_list:
+                status_info = db_status.get(ap['bssid'], {})
+                ap['status'] = status_info.get('status', 'nowy')
+                ap['liczba_atakow_deauth'] = status_info.get('liczba_atakow_deauth', 0)
+                ap['liczba_atakow_pmkid'] = status_info.get('liczba_atakow_pmkid', 0)
+                
+                bssid_file_name = ap['bssid'].replace(":", "-")
+                essid_safe = "".join([c for c in str(ap['essid']) if c.isalnum() or c in ('_', '-')]).strip()
+                if not essid_safe:
+                    essid_safe = "ukryta"
+                
+                pcap_name = f"{essid_safe}_{bssid_file_name}.pcap"
+                hash_name = f"{essid_safe}_{bssid_file_name}.hc22000"
+                
+                ap['pcap_exists'] = os.path.exists(os.path.join('handshakes', pcap_name))
+                ap['hash_exists'] = os.path.exists(os.path.join('handshakes', hash_name))
+                ap['pcap_filename'] = pcap_name
+                ap['hash_filename'] = hash_name
+                
+            active_list.sort(key=lambda x: x['rssi'], reverse=True)
+            return active_list

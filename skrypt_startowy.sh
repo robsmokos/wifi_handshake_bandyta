@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Przejdź do katalogu skryptu
+cd "$(dirname "$0")"
+
 # Domyślnie uruchamia wlan0, jeśli nie podano inaczej
 IFACE=${1:-wlan0}
 
@@ -18,7 +21,8 @@ EOF
 
 echo "Uruchamianie środowiska dla interfejsu $IFACE..."
 
-# Tworzenie sesji tmux podzielonej w poziomie
+# Tworzenie sesji tmux: góra bettercap, dół podzielony pionowo (lewo: python, prawo: shell)
 tmux new-session -d -s wifi_collector "bettercap -iface $IFACE -caplet bettercap_config.cap || sleep 60"
 tmux split-window -t wifi_collector -v -p 65 "python3 main.py || sleep 60"
+tmux split-window -t wifi_collector.1 -h
 #tmux attach-session -t wifi_collector

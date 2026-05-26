@@ -5,6 +5,8 @@ from core.brain import Brain
 from core.executor import Executor
 import sys
 import time
+from aiohttp import web
+from web import WebServer
 
 async def status_bar(db, event_queue, attack_queue, state):
     """Odświeża statystyki i rysuje TUI (Text User Interface) w dolnej części ekranu."""
@@ -12,8 +14,9 @@ async def status_bar(db, event_queue, attack_queue, state):
     aps = []
     total, captured = 0, 0
     
-    # Ukryj kursor terminala by nie mrugał
-    sys.stdout.write("\033[?25l")
+    # Ukryj kursor i wyczyść ekran na starcie
+    sys.stdout.write("\033[?25l\033[2J\033[H")
+    sys.stdout.flush()
     
     while True:
         try:
@@ -28,8 +31,8 @@ async def status_bar(db, event_queue, attack_queue, state):
                 aps = await db.get_top_aps(limit=8)
                 last_db_query = now
                 
-            # Zamiast czyścić ekran, po prostu jedziemy karetką do góry by nadpisać poprzednie linie TUI
-            lines = ["\033[H\033[K\033[1mBSSID             | ESSID                | ATK | STATUS\033[0m"]
+            # Powrót do pozycji home
+            lines = ["\033[H\033[1mBSSID             | ESSID                | ATK | STATUS\033[0m"]
             
             for ap in aps:
                 atk_str = f"{ap.get('liczba_atakow_deauth', 0)}/{ap.get('liczba_atakow_pmkid', 0)}"
@@ -47,6 +50,8 @@ async def status_bar(db, event_queue, attack_queue, state):
             lines.append(f"\033[K{action}")
             lines.append(f"\033[K\033[1mAP:\033[0m {total} | \033[1mPrzechwycone:\033[0m {captured} | \033[1mQ(Ev/Atk):\033[0m {event_queue.qsize()}/{attack_queue.qsize()}")
             
+            # Wyczyść pozostałość pod panelem
+            lines.append("\033[J")
             output = "\n".join(lines)
             sys.stdout.write(output)
             sys.stdout.flush()
@@ -57,6 +62,22 @@ async def status_bar(db, event_queue, attack_queue, state):
             with open("/home/kali/skanerb/core/error.log", "a") as f:
                 f.write(f"UI Error: {e}\n")
             await asyncio.sleep(1)
+
+async def start_web_server(db, shared_state):
+    """Asynchronicznie uruchamia serwer WWW na porcie 8080."""
+    ws = WebServer(db, shared_state)
+    app = web.Application()
+    app.router.add_get('/', ws.get_index)
+    app.router.add_get('/api/stats', ws.get_stats)
+    app.router.add_get('/api/aps', ws.get_aps)
+    # Obsługa statycznego pobierania handshake'ów z folderu handshakes
+    app.router.add_static('/handshakes/', path='handshakes', name='handshakes')
+    
+    # access_log=None wycisza logi HTTP, zapobiegając rozbijaniu dolnego panelu TUI w tmuxie
+    runner = web.AppRunner(app, access_log=None)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
 
 async def main():
     # Inicjalizacja komponentów
@@ -71,6 +92,9 @@ async def main():
     api = BettercapAPI(event_queue, username="kali", password="kali")
     brain = Brain(db, event_queue, attack_queue)
     executor = Executor(db, api, attack_queue, brain, shared_state)
+
+    # Uruchomienie serwera WWW w tej samej pętli asyncio
+    await start_web_server(db, shared_state)
 
     # Uruchomienie zadań współbieżnych
     tasks = [

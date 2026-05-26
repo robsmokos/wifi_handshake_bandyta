@@ -40,13 +40,24 @@ class Brain:
         bssid = ap.get('mac')
         if not bssid: return
         
-        essid = ap.get('hostname', '<ukryty>')
+        essid = ap.get('essid') or ap.get('hostname') or '<ukryty>'
         vendor = ap.get('vendor', '')
         rssi = ap.get('rssi', -100)
         channel = ap.get('channel', 1)
+        encryption = ap.get('encryption', '')
+        clients = ap.get('clients', [])
         
-        # 1. Zapis do DB (async)
+        # 1. Zapis do DB (async) oraz do listy aktywnych sieci
         await self.db.update_ap(bssid, essid=essid, vendor=vendor)
+        await self.db.update_active_ap(
+            bssid=bssid,
+            essid=essid,
+            vendor=vendor,
+            rssi=rssi,
+            channel=channel,
+            encryption=encryption,
+            clients=clients
+        )
         
         # 2. Pobranie najnowszych danych by przeliczyć Scoring
         db_info = await self.db.get_ap(bssid)
