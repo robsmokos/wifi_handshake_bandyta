@@ -2,6 +2,8 @@ from aiohttp import web
 import aiosqlite
 import json
 import os
+import psutil
+from datetime import datetime
 
 class WebServer:
     def __init__(self, db, shared_state=None):
@@ -45,6 +47,7 @@ class WebServer:
             display: inline-block;
             margin-right: 5px;
             transition: all 0.3s ease;
+            flex-shrink: 0;
         }
         .pulse-green {
             background-color: #00ff00;
@@ -75,6 +78,10 @@ class WebServer:
             font-family: monospace;
             font-weight: bold;
             margin-right: 3px;
+            width: 3ch;
+            text-align: center;
+            flex-shrink: 0;
+            white-space: nowrap;
         }
         .control-panel {
             margin-bottom: 15px;
@@ -147,6 +154,12 @@ class WebServer:
         <strong>ZŁAPANE:</strong> <span id="stat-captured" style="color: #ffffff;">0</span>
         <span style="color: #1f940b; margin: 0 8px;">|</span>
         <strong>SKUTECZNOŚĆ:</strong> <span id="stat-rate" style="color: #ffffff;">0.0%</span>
+        <span style="color: #1f940b; margin: 0 8px;">|</span>
+        <strong>CPU:</strong> <span id="stat-cpu" style="color: #ffffff;">0.0%</span>
+        <span style="color: #1f940b; margin: 0 8px;">|</span>
+        <strong>RAM:</strong> <span id="stat-ram" style="color: #ffffff;">0.0%</span>
+        <span style="color: #1f940b; margin: 0 8px;">|</span>
+        <span id="stat-datetime" style="color: #888888; font-family: monospace;">-</span>
     </div>
 
     <h2>Widok: <span id="view-title">Aktywne sieci</span></h2>
@@ -212,6 +225,15 @@ class WebServer:
                 statCaptured.innerText = data.captured;
                 const rate = data.total > 0 ? ((data.captured / data.total) * 100).toFixed(1) : 0;
                 statRate.innerText = rate + '%';
+                
+                // Update CPU, RAM, and Datetime
+                const statCpu = document.getElementById('stat-cpu');
+                const statRam = document.getElementById('stat-ram');
+                const statDatetime = document.getElementById('stat-datetime');
+                
+                if (statCpu) statCpu.innerText = (data.cpu || 0.0).toFixed(1) + '%';
+                if (statRam) statRam.innerText = (data.ram || 0.0).toFixed(1) + '%';
+                if (statDatetime) statDatetime.innerText = data.datetime || '';
                 
                 const action = data.action || 'Skanowanie eteru...';
                 pwnStatus.innerText = action;
@@ -417,11 +439,23 @@ class WebServer:
         elif "Błąd" in action or "error" in action.lower():
             face = "(X_X)"
 
+        try:
+            cpu = psutil.cpu_percent()
+            ram = psutil.virtual_memory().percent
+        except Exception:
+            cpu = 0.0
+            ram = 0.0
+            
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
         data = {
             "total": total,
             "captured": captured,
             "action": action,
-            "face": face
+            "face": face,
+            "cpu": cpu,
+            "ram": ram,
+            "datetime": now_str
         }
         return web.json_response(data)
 
