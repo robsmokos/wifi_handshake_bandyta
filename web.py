@@ -211,10 +211,10 @@ class WebServer:
                     if (isCaptured) {
                         let links = [];
                         if (ap.pcap_exists) {
-                            links.push(\`<a href="/handshakes/${ap.pcap_filename}" download>[PCAP]</a>\`);
+                            links.push("<a href='/handshakes/" + ap.pcap_filename + "' download>[PCAP]</a>");
                         }
                         if (ap.hash_exists) {
-                            links.push(\`<a href="/handshakes/${ap.hash_filename}" download>[22000]</a>\`);
+                            links.push("<a href='/handshakes/" + ap.hash_filename + "' download>[22000]</a>");
                         }
                         downloads = links.join(' ');
                     }
