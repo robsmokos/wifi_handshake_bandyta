@@ -61,7 +61,7 @@ class WebServer:
             margin-top: 10px;
         }
         th, td {
-            padding: 8px;
+            padding: 4px 8px;
             text-align: left;
         }
         th {
