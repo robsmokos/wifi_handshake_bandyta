@@ -33,6 +33,48 @@ class WebServer:
         .stats-box {
             padding: 5px 0px;
             margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+            transition: all 0.3s ease;
+        }
+        .pulse-green {
+            background-color: #00ff00;
+            box-shadow: 0 0 8px #00ff00;
+            animation: pulse 1.2s infinite alternate;
+        }
+        .pulse-yellow {
+            background-color: #ffaa00;
+            box-shadow: 0 0 8px #ffaa00;
+            animation: pulse 0.6s infinite alternate;
+        }
+        .pulse-red {
+            background-color: #ff3333;
+            box-shadow: 0 0 8px #ff3333;
+            animation: pulse 0.4s infinite alternate;
+        }
+        .pulse-white {
+            background-color: #ffffff;
+            box-shadow: 0 0 10px #ffffff;
+            animation: pulse 0.8s infinite alternate;
+        }
+        @keyframes pulse {
+            from { opacity: 0.4; transform: scale(0.85); }
+            to { opacity: 1; transform: scale(1.15); }
+        }
+        .status-spinner {
+            display: inline-block;
+            font-family: monospace;
+            font-weight: bold;
+            margin-right: 3px;
         }
         .control-panel {
             margin-bottom: 15px;
@@ -95,12 +137,16 @@ class WebServer:
     </div>
     
     <div class="stats-box">
-        <div><strong>STATUS:</strong> <span id="pwn-status">Inicjalizacja...</span></div>
-        <div style="margin-top: 5px;">
-            <strong>SIECI:</strong> <span id="stat-total">0</span> | 
-            <strong>ZŁAPANE:</strong> <span id="stat-captured">0</span> | 
-            <strong>SKUTECZNOŚĆ:</strong> <span id="stat-rate">0.0%</span>
-        </div>
+        <strong>STATUS:</strong>
+        <span id="status-dot" class="status-dot pulse-green"></span>
+        <span id="status-spinner" class="status-spinner">[/]</span>
+        <span id="pwn-status" style="color: #00ff00; font-weight: bold;">Inicjalizacja...</span>
+        <span style="color: #1f940b; margin: 0 8px;">|</span>
+        <strong>SIECI:</strong> <span id="stat-total" style="color: #ffffff;">0</span>
+        <span style="color: #1f940b; margin: 0 8px;">|</span>
+        <strong>ZŁAPANE:</strong> <span id="stat-captured" style="color: #ffffff;">0</span>
+        <span style="color: #1f940b; margin: 0 8px;">|</span>
+        <strong>SKUTECZNOŚĆ:</strong> <span id="stat-rate" style="color: #ffffff;">0.0%</span>
     </div>
 
     <h2>Widok: <span id="view-title">Aktywne sieci</span></h2>
@@ -166,7 +212,36 @@ class WebServer:
                 statCaptured.innerText = data.captured;
                 const rate = data.total > 0 ? ((data.captured / data.total) * 100).toFixed(1) : 0;
                 statRate.innerText = rate + '%';
-                pwnStatus.innerText = data.action;
+                
+                const action = data.action || 'Skanowanie eteru...';
+                pwnStatus.innerText = action;
+
+                // Color code and animate status dynamically
+                const pwnStatusSpan = document.getElementById('pwn-status');
+                const statusDot = document.getElementById('status-dot');
+                const statusSpinner = document.getElementById('status-spinner');
+                
+                if (pwnStatusSpan && statusDot && statusSpinner) {
+                    statusDot.className = 'status-dot'; // Reset classes
+                    
+                    if (action.includes('ATAK') || action.includes('Wysyłanie') || action.includes('Deauth') || action.includes('PMKID')) {
+                        pwnStatusSpan.style.color = '#ffaa00';
+                        statusDot.classList.add('pulse-yellow');
+                        statusSpinner.style.color = '#ffaa00';
+                    } else if (action.includes('Błąd') || action.includes('Error') || action.includes('nie powiodło')) {
+                        pwnStatusSpan.style.color = '#ff3333';
+                        statusDot.classList.add('pulse-red');
+                        statusSpinner.style.color = '#ff3333';
+                    } else if (action.includes('ZŁAPANO') || action.includes('SUKCES') || action.includes('przechwycono')) {
+                        pwnStatusSpan.style.color = '#ffffff';
+                        statusDot.classList.add('pulse-white');
+                        statusSpinner.style.color = '#ffffff';
+                    } else {
+                        pwnStatusSpan.style.color = '#00ff00';
+                        statusDot.classList.add('pulse-green');
+                        statusSpinner.style.color = '#00ff00';
+                    }
+                }
 
                 // Pure ASCII Face Updates
                 const faceCode = data.face;
@@ -180,6 +255,10 @@ class WebServer:
             } catch (err) {
                 console.error(err);
                 pwnStatus.innerText = "BŁĄD POŁĄCZENIA";
+                const statusDot = document.getElementById('status-dot');
+                if (statusDot) {
+                    statusDot.className = 'status-dot pulse-red';
+                }
                 const pwnFace = document.getElementById('pwn-face');
                 const pwnFaceLbl = document.getElementById('pwn-face-lbl');
                 if (pwnFace) pwnFace.innerText = "(X_X)";
@@ -298,6 +377,18 @@ class WebServer:
         });
 
         statusFilter.addEventListener('change', fetchAPs);
+
+        // Spinner animation setup
+        let spinnerFrames = ['[|]', '[/]', '[-]', '[\\]'];
+        let spinnerIndex = 0;
+        const statusSpinnerElement = document.getElementById('status-spinner');
+        
+        setInterval(() => {
+            if (statusSpinnerElement) {
+                statusSpinnerElement.innerText = spinnerFrames[spinnerIndex];
+                spinnerIndex = (spinnerIndex + 1) % spinnerFrames.length;
+            }
+        }, 150);
 
         fetchStats();
         fetchAPs();
