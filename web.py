@@ -425,8 +425,9 @@ class WebServer:
 
         statusFilter.addEventListener('change', fetchAPs);
 
-        // Spinner animation setup - Quadrant block spinner frames, pure ASCII text, 100% layout stable
-        let spinnerFrames = ['[▖]', '[▘]', '[▝]', '[▗]'];
+        // Spinner animation setup - Restored classic terminal spinner, pure ASCII text, 100% layout stable
+        // Note: 4 backslashes in Python source compiles to 2 backslashes in HTML, which JS parses as a single backslash '\'
+        let spinnerFrames = ['[|]', '[/]', '[-]', '[\\\\]'];
         let spinnerIndex = 0;
         const statusSpinnerElement = document.getElementById('status-spinner');
         
