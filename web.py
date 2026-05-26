@@ -61,7 +61,6 @@ class WebServer:
             margin-top: 10px;
         }
         th, td {
-            border: 1px solid #00ff00;
             padding: 8px;
             text-align: left;
         }
@@ -169,6 +168,7 @@ class WebServer:
                 if (currentView === 'active') {
                     thead.innerHTML = `
                         <tr>
+                            <th style="width: 40px;">#</th>
                             <th>SIGNAL</th>
                             <th>BSSID</th>
                             <th>ESSID</th>
@@ -183,6 +183,7 @@ class WebServer:
                 } else {
                     thead.innerHTML = `
                         <tr>
+                            <th style="width: 40px;">#</th>
                             <th>BSSID</th>
                             <th>ESSID</th>
                             <th>PRODUCENT</th>
@@ -196,12 +197,12 @@ class WebServer:
                 networksTbody.innerHTML = '';
 
                 if (aps.length === 0) {
-                    const colSpan = currentView === 'active' ? 9 : 6;
+                    const colSpan = currentView === 'active' ? 10 : 7;
                     networksTbody.innerHTML = `<tr><td colspan="${colSpan}">-- Brak wyników wyszukiwania --</td></tr>`;
                     return;
                 }
 
-                aps.forEach(ap => {
+                aps.forEach((ap, idx) => {
                     const tr = document.createElement('tr');
                     const isCaptured = ap.status.includes('przechwycono');
                     const statusText = isCaptured ? 'CAPTURED' : 'NEW';
@@ -221,6 +222,7 @@ class WebServer:
 
                     if (currentView === 'active') {
                         tr.innerHTML = `
+                            <td style="color: #888;">${idx + 1}</td>
                             <td style="font-weight: bold;">${ap.rssi} dBm</td>
                             <td>${ap.bssid}</td>
                             <td class="${statusClass}">${ap.essid || '<ukryty>'}</td>
@@ -233,6 +235,7 @@ class WebServer:
                         `;
                     } else {
                         tr.innerHTML = `
+                            <td style="color: #888;">${idx + 1}</td>
                             <td>${ap.bssid}</td>
                             <td class="${statusClass}">${ap.essid || '<ukryty>'}</td>
                             <td>${ap.vendor || 'UNKNOWN'}</td>
@@ -245,7 +248,7 @@ class WebServer:
                 });
             } catch (err) {
                 console.error(err);
-                const colSpan = currentView === 'active' ? 9 : 6;
+                const colSpan = currentView === 'active' ? 10 : 7;
                 networksTbody.innerHTML = `<tr><td colspan="${colSpan}" style="color: red;">BŁĄD ZAPISU BAZY / I/O</td></tr>`;
             }
         }
