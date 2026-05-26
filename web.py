@@ -209,7 +209,6 @@ class WebServer:
                             <th>CLI</th>
                             <th>ATK</th>
                             <th>STATUS</th>
-                            <th>DOWNLOADS</th>
                         </tr>
                     `;
                 } else {
@@ -221,7 +220,6 @@ class WebServer:
                             <th>PRODUCENT</th>
                             <th>STATUS</th>
                             <th>OSTATNIO</th>
-                            <th>DOWNLOADS</th>
                         </tr>
                     `;
                 }
@@ -229,7 +227,7 @@ class WebServer:
                 networksTbody.innerHTML = '';
 
                 if (aps.length === 0) {
-                    const colSpan = currentView === 'active' ? 12 : 7;
+                    const colSpan = currentView === 'active' ? 11 : 6;
                     networksTbody.innerHTML = `<tr><td colspan="${colSpan}">-- Brak wyników wyszukiwania --</td></tr>`;
                     return;
                 }
@@ -239,18 +237,6 @@ class WebServer:
                     const isCaptured = ap.status.includes('przechwycono');
                     const statusText = isCaptured ? 'CAPTURED' : 'NEW';
                     const statusClass = isCaptured ? 'captured' : '';
-
-                    let downloads = 'brak';
-                    if (isCaptured) {
-                        let links = [];
-                        if (ap.pcap_exists) {
-                            links.push("<a href='/handshakes/" + ap.pcap_filename + "' download>[PCAP]</a>");
-                        }
-                        if (ap.hash_exists) {
-                            links.push("<a href='/handshakes/" + ap.hash_filename + "' download>[22000]</a>");
-                        }
-                        downloads = links.join(' ');
-                    }
 
                     let rssiColor = "#00ff00";
                     if (ap.rssi >= -60) rssiColor = "#ffffff";
@@ -285,7 +271,6 @@ class WebServer:
                             <td style="font-weight: ${ap.client_count > 0 ? 'bold' : 'normal'}; color: ${ap.client_count > 0 ? '#ffffff' : 'inherit'};">${ap.client_count}</td>
                             <td>${ap.liczba_atakow_deauth || 0}/${ap.liczba_atakow_pmkid || 0}</td>
                             <td class="${statusClass}">${statusText}</td>
-                            <td>${downloads}</td>
                         `;
                     } else {
                         tr.innerHTML = `
@@ -295,14 +280,13 @@ class WebServer:
                             <td>${ap.vendor || 'UNKNOWN'}</td>
                             <td class="${statusClass}">${statusText}</td>
                             <td>${ap.last_seen || '-'}</td>
-                            <td>${downloads}</td>
                         `;
                     }
                     networksTbody.appendChild(tr);
                 });
             } catch (err) {
                 console.error(err);
-                const colSpan = currentView === 'active' ? 12 : 7;
+                const colSpan = currentView === 'active' ? 11 : 6;
                 networksTbody.innerHTML = `<tr><td colspan="${colSpan}" style="color: red;">BŁĄD ZAPISU BAZY / I/O</td></tr>`;
             }
         }
