@@ -61,7 +61,7 @@ class WebServer:
             margin-top: 10px;
         }
         th, td {
-            padding: 4px 8px;
+            padding: 2px 8px;
             text-align: left;
         }
         th {
@@ -220,10 +220,17 @@ class WebServer:
                         downloads = links.join(' ');
                     }
 
+                    let rssiColor = "#00ff00";
+                    if (ap.rssi >= -60) rssiColor = "#ffffff";
+                    else if (ap.rssi >= -70) rssiColor = "#00ff00";
+                    else if (ap.rssi >= -80) rssiColor = "#aaff00";
+                    else if (ap.rssi >= -90) rssiColor = "#ffaa00";
+                    else rssiColor = "#ff5555";
+
                     if (currentView === 'active') {
                         tr.innerHTML = `
                             <td style="color: #888;">${idx + 1}</td>
-                            <td style="font-weight: bold;">${ap.rssi} dBm</td>
+                            <td style="font-weight: bold; color: ${rssiColor};">${ap.rssi} dBm</td>
                             <td>${ap.bssid}</td>
                             <td class="${statusClass}">${ap.essid || '<ukryty>'}</td>
                             <td>${ap.channel || '?'}</td>
