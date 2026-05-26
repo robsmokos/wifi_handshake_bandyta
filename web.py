@@ -89,10 +89,9 @@ class WebServer:
             <h1 style="border: none; margin: 0; padding: 0;">BetterCup WiFi Console</h1>
             <div style="font-size: 0.8rem; color: #1f940b; margin-top: 5px; font-weight: bold;">[ HACK THE PLANET ]</div>
         </div>
-        <!-- Pwnagotchi Monitor Face in Top Right -->
-        <div style="border: 1px solid #00ff00; padding: 5px 15px; background-color: #000; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 120px; height: 75px; text-shadow: none;">
-            <img id="pwn-face-img" src="" alt="Face" style="max-height: 45px; image-rendering: pixelated; filter: drop-shadow(0 0 2px rgba(57,255,20,0.6)); display: none;">
-            <span id="pwn-face" style="font-size: 1.6rem; font-weight: bold; color: #00ff00; text-shadow: 0 0 4px rgba(57, 255, 20, 0.45);">(o_O)</span>
+        <!-- Pwnagotchi Monitor Face in Top Right - Pure ASCII / No Border -->
+        <div style="padding: 5px 15px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 120px; text-shadow: none;">
+            <span id="pwn-face" style="font-size: 1.8rem; font-weight: bold; color: #00ff00; text-shadow: 0 0 4px rgba(57, 255, 20, 0.45); font-family: monospace;">(o_O)</span>
             <div id="pwn-face-lbl" style="font-size: 0.65rem; color: #1f940b; font-weight: bold; margin-top: 3px; text-transform: uppercase; font-family: monospace;">AWAKE</div>
         </div>
     </div>
@@ -153,7 +152,7 @@ class WebServer:
             fetchAPs();
         }
 
-        // Mappings from ASCII states to Hackers Movie theme PNG names
+        // Mappings from ASCII states to Text Status Labels
         const faceNameMap = {
             "(o_O)": "AWAKE",
             "(>_<)": "INTENSE",
@@ -171,39 +170,21 @@ class WebServer:
                 statRate.innerText = rate + '%';
                 pwnStatus.innerText = data.action;
 
-                // Dynamic Hackers Movie Face Update
+                // Pure ASCII Face Updates
                 const faceCode = data.face;
                 const mappedName = faceNameMap[faceCode] || "AWAKE";
-                const imgUrl = `https://github.com/roodriiigooo/PWNAGOTCHI-CUSTOM-FACES-MOD/raw/main/custom-themes/hackersMovie/_faces/${mappedName}.png`;
                 
-                const pwnFaceImg = document.getElementById('pwn-face-img');
                 const pwnFace = document.getElementById('pwn-face');
                 const pwnFaceLbl = document.getElementById('pwn-face-lbl');
                 
+                if (pwnFace) pwnFace.innerText = faceCode;
                 if (pwnFaceLbl) pwnFaceLbl.innerText = mappedName;
-                if (pwnFaceImg) {
-                    pwnFaceImg.src = imgUrl;
-                    pwnFaceImg.onload = () => {
-                        pwnFaceImg.style.display = 'block';
-                        pwnFace.style.display = 'none';
-                    };
-                    pwnFaceImg.onerror = () => {
-                        pwnFaceImg.style.display = 'none';
-                        pwnFace.style.display = 'inline-block';
-                        pwnFace.innerText = faceCode;
-                    };
-                }
             } catch (err) {
                 console.error(err);
                 pwnStatus.innerText = "BŁĄD POŁĄCZENIA";
-                const pwnFaceImg = document.getElementById('pwn-face-img');
                 const pwnFace = document.getElementById('pwn-face');
                 const pwnFaceLbl = document.getElementById('pwn-face-lbl');
-                if (pwnFaceImg) pwnFaceImg.style.display = 'none';
-                if (pwnFace) {
-                    pwnFace.style.display = 'inline-block';
-                    pwnFace.innerText = "(X_X)";
-                }
+                if (pwnFace) pwnFace.innerText = "(X_X)";
                 if (pwnFaceLbl) pwnFaceLbl.innerText = "SAD";
             }
         }
