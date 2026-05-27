@@ -70,6 +70,8 @@ async def start_web_server(db, shared_state):
     app.router.add_get('/', ws.get_index)
     app.router.add_get('/api/stats', ws.get_stats)
     app.router.add_get('/api/aps', ws.get_aps)
+    app.router.add_get('/api/ap', ws.get_ap_details)
+    app.router.add_get('/api/dashboard_stats', ws.get_dashboard_stats)
     # Obsługa statycznego pobierania handshake'ów z folderu handshakes
     app.router.add_static('/handshakes/', path='handshakes', name='handshakes')
     

@@ -62,13 +62,9 @@ class Validator:
                 
                 # Wycięcie pakietów dla konkretnego BSSID z głównego pcapa za pomocą tcpdump (lekki i zawsze obecny)
                 try:
-                    # Filtrujemy pakiety gdzie MAC to bssid (zarówno jako nadawca, odbiorca, jak i bssid w 802.11)
-                    filter_cmd = f"wlan addr1 {bssid} or wlan addr2 {bssid} or wlan addr3 {bssid}"
-                    # W razie gdyby tcpdump nie wspierał wlan (niektóre starsze kompilacje), robimy prosty ether filter
-                    # ale wlan addr jest najpewniejszy dla 802.11.
                     tcpdump_proc = await asyncio.create_subprocess_exec(
                         "tcpdump", "-r", self.pcap_file, "-w", final_pcap_path,
-                        "ether host " + bssid,
+                        "ether", "host", bssid,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE
                     )
@@ -88,9 +84,8 @@ class Validator:
                     except Exception as e:
                         sys.stderr.write(f"Błąd generowania dedykowanego hasha: {e}\n")
                 
-                # Zapisujemy sukces w bazie, podając ścieżkę do dedykowanego pliku pcap
-                save_path = final_pcap_path if os.path.exists(final_pcap_path) else self.pcap_file
-                await self.db.update_status(bssid, status, save_path)
+                # Zapisujemy sukces w bazie
+                await self.db.update_status(bssid, status)
                 
                 # Renderowanie wielkiego komunikatu ASCII, który odsunie pasek zadań w dół
                 art = f"""

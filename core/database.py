@@ -20,19 +20,20 @@ class Database:
             await conn.execute("PRAGMA synchronous=NORMAL;")
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS handshakes (
-                    bssid TEXT PRIMARY KEY,
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    bssid TEXT UNIQUE,
                     essid TEXT,
                     vendor TEXT,
                     first_seen TEXT,
                     last_seen TEXT,
                     gps_lat REAL,
                     gps_lon REAL,
-                    sciezka_do_pliku TEXT,
                     czas_przechwycenia TEXT,
                     last_attacked_at REAL DEFAULT 0,
                     liczba_atakow_deauth INTEGER DEFAULT 0,
                     liczba_atakow_pmkid INTEGER DEFAULT 0,
-                    status TEXT DEFAULT 'nowy'
+                    status TEXT DEFAULT 'nowy',
+                    last_modified TEXT
                 )
             ''')
             await conn.commit()
@@ -59,20 +60,26 @@ class Database:
         async with self.lock:
             if bssid not in self.pending_updates:
                 if existing:
+                    # Upewnij się że stare rekordy z bazy mają pole last_modified
+                    if 'last_modified' not in existing or existing['last_modified'] is None:
+                        existing['last_modified'] = existing.get('last_seen', now_str)
                     self.pending_updates[bssid] = existing
                 else:
                     self.pending_updates[bssid] = {
+                        'id': None,
                         'bssid': bssid, 'essid': essid, 'vendor': vendor,
                         'first_seen': now_str, 'last_seen': now_str,
                         'gps_lat': gps_lat, 'gps_lon': gps_lon,
-                        'sciezka_do_pliku': None, 'czas_przechwycenia': None,
+                        'czas_przechwycenia': None,
                         'last_attacked_at': 0.0,
                         'liczba_atakow_deauth': 0, 'liczba_atakow_pmkid': 0,
-                        'status': 'nowy'
+                        'status': 'nowy',
+                        'last_modified': now_str
                     }
                     
             ap = self.pending_updates[bssid]
             ap['last_seen'] = now_str
+            ap['last_modified'] = now_str
             if essid and ap['essid'] != essid:
                 # Nie nadpisujemy znanej nazwy sieci ogólnym znacznikiem ukrycia
                 is_current_hidden = ap['essid'] in (None, "", "<ukryty>", "<ukryte>", "ukryta")
@@ -90,11 +97,15 @@ class Database:
         
         async with self.lock:
             if bssid not in self.pending_updates:
-                if existing: self.pending_updates[bssid] = existing
+                if existing:
+                    if 'last_modified' not in existing or existing['last_modified'] is None:
+                        existing['last_modified'] = existing.get('last_seen', '')
+                    self.pending_updates[bssid] = existing
                 
             if bssid in self.pending_updates:
                 ap = self.pending_updates[bssid]
                 ap['last_attacked_at'] = time.time()
+                ap['last_modified'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 if attack_type == "deauth":
                     ap['liczba_atakow_deauth'] += 1
                 elif attack_type == "pmkid":
@@ -102,19 +113,22 @@ class Database:
                     
         await self.check_flush()
 
-    async def update_status(self, bssid, status, pcap_path=None):
+    async def update_status(self, bssid, status):
         existing = await self.get_ap(bssid)
         
         async with self.lock:
             if bssid not in self.pending_updates:
-                if existing: self.pending_updates[bssid] = existing
+                if existing:
+                    if 'last_modified' not in existing or existing['last_modified'] is None:
+                        existing['last_modified'] = existing.get('last_seen', '')
+                    self.pending_updates[bssid] = existing
                 
             if bssid in self.pending_updates:
                 ap = self.pending_updates[bssid]
                 ap['status'] = status
+                ap['last_modified'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 if status in ['przechwycono', 'pmkid_przechwycono']:
                     ap['czas_przechwycenia'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    if pcap_path: ap['sciezka_do_pliku'] = pcap_path
                     
         await self.check_flush()
 
@@ -140,8 +154,8 @@ class Database:
                     await conn.execute('''
                         INSERT INTO handshakes (
                             bssid, essid, vendor, first_seen, last_seen, 
-                            gps_lat, gps_lon, sciezka_do_pliku, czas_przechwycenia,
-                            last_attacked_at, liczba_atakow_deauth, liczba_atakow_pmkid, status
+                            gps_lat, gps_lon, czas_przechwycenia,
+                            last_attacked_at, liczba_atakow_deauth, liczba_atakow_pmkid, status, last_modified
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(bssid) DO UPDATE SET
                             essid=excluded.essid,
@@ -149,16 +163,16 @@ class Database:
                             last_seen=excluded.last_seen,
                             gps_lat=excluded.gps_lat,
                             gps_lon=excluded.gps_lon,
-                            sciezka_do_pliku=excluded.sciezka_do_pliku,
                             czas_przechwycenia=excluded.czas_przechwycenia,
                             last_attacked_at=excluded.last_attacked_at,
                             liczba_atakow_deauth=excluded.liczba_atakow_deauth,
                             liczba_atakow_pmkid=excluded.liczba_atakow_pmkid,
-                            status=excluded.status
+                            status=excluded.status,
+                            last_modified=excluded.last_modified
                     ''', (
                         data['bssid'], data['essid'], data['vendor'], data['first_seen'], data['last_seen'],
-                        data['gps_lat'], data['gps_lon'], data['sciezka_do_pliku'], data['czas_przechwycenia'],
-                        data['last_attacked_at'], data['liczba_atakow_deauth'], data['liczba_atakow_pmkid'], data['status']
+                        data['gps_lat'], data['gps_lon'], data['czas_przechwycenia'],
+                        data['last_attacked_at'], data['liczba_atakow_deauth'], data['liczba_atakow_pmkid'], data['status'], data.get('last_modified')
                     ))
                 await conn.commit()
         except Exception as e:
@@ -315,7 +329,7 @@ class Database:
                 ap['score'] = round(score, 1)
                 
                 bssid_file_name = ap['bssid'].replace(":", "-")
-                essid_safe = "".join([c for c in str(ap['essid']) if c.isalnum() or c in ('_', '-')]).strip()
+                essid_safe = "".join([c for c in str(ap['essid'] or '') if c.isalnum() or c in ('_', '-')]).strip()
                 if not essid_safe:
                     essid_safe = "ukryta"
                 

@@ -17,6 +17,7 @@ set wifi.recon.channel clear
 set wifi.handshakes.file handshakes/handshakes.pcap
 wifi.recon on
 api.rest on
+gps on
 EOF
 
 echo "Uruchamianie środowiska dla interfejsu $IFACE..."

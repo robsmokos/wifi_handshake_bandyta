@@ -47,8 +47,11 @@ class Brain:
         encryption = ap.get('encryption', '')
         clients = ap.get('clients', [])
         
+        gps_lat = ap.get('gps_lat', data.get('gps_lat'))
+        gps_lon = ap.get('gps_lon', data.get('gps_lon'))
+        
         # 1. Zapis do DB (async) oraz do listy aktywnych sieci
-        await self.db.update_ap(bssid, essid=essid, vendor=vendor)
+        await self.db.update_ap(bssid, essid=essid, vendor=vendor, gps_lat=gps_lat, gps_lon=gps_lon)
         await self.db.update_active_ap(
             bssid=bssid,
             essid=essid,
@@ -71,7 +74,6 @@ class Brain:
         if bssid in self.in_attack_queue: return
         
         # 3. SCORING SYSTEM z Historią i Karami (Penalty)
-        clients = ap.get('clients', [])
         client_count = len(clients) if isinstance(clients, (list, dict)) else 0
         
         failures = db_info.get('liczba_atakow_deauth', 0) + db_info.get('liczba_atakow_pmkid', 0)
@@ -116,6 +118,8 @@ class Brain:
         else:
             if db_info.get('liczba_atakow_pmkid', 0) < 3:
                 attack_type = "pmkid"
+            else:
+                return  # Limit PMKID osiągnięty, brak klientów - sieć wyczerpana
                 
         if attack_type:
             # Budowa "Wyroku" dla Executora

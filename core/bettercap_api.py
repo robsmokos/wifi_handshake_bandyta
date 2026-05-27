@@ -11,6 +11,7 @@ class BettercapAPI:
         self.auth = aiohttp.BasicAuth(username, password) if username or password else None
         self.event_queue = event_queue
         self.running = True
+        self.current_gps = (None, None)
 
     async def run_command(self, cmd):
         """Wysyła pojedynczą komendę do sesji Bettercapa z wymuszonym Timeoutem."""
@@ -50,8 +51,18 @@ class BettercapAPI:
                         async with session.get(self.url_session) as response:
                             if response.status == 200:
                                 data = await response.json()
+                                gps = data.get('gps', {})
+                                if gps and 'Latitude' in gps and 'Longitude' in gps:
+                                    lat = gps.get('Latitude')
+                                    lon = gps.get('Longitude')
+                                    if lat != 0.0 and lon != 0.0:
+                                        self.current_gps = (lat, lon)
+                                        
                                 aps = data.get('wifi', {}).get('aps', [])
                                 for ap in aps:
+                                    if self.current_gps[0] is not None:
+                                        ap['gps_lat'] = self.current_gps[0]
+                                        ap['gps_lon'] = self.current_gps[1]
                                     try:
                                         await asyncio.wait_for(self.event_queue.put({'data': {'ap': ap}}), timeout=0.1)
                                     except asyncio.TimeoutError:
@@ -70,6 +81,15 @@ class BettercapAPI:
                                 for event in events:
                                     tag = event.get('tag', '')
                                     if tag.startswith('wifi.ap.') or tag.startswith('wifi.client.'):
+                                        if self.current_gps[0] is not None:
+                                            if 'data' not in event:
+                                                event['data'] = {}
+                                            if 'ap' in event['data']:
+                                                event['data']['ap']['gps_lat'] = self.current_gps[0]
+                                                event['data']['ap']['gps_lon'] = self.current_gps[1]
+                                            else:
+                                                event['data']['gps_lat'] = self.current_gps[0]
+                                                event['data']['gps_lon'] = self.current_gps[1]
                                         try:
                                             await asyncio.wait_for(self.event_queue.put(event), timeout=2)
                                         except asyncio.TimeoutError:

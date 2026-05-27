@@ -4,6 +4,11 @@ import json
 import os
 import psutil
 from datetime import datetime
+import io
+import base64
+import matplotlib
+matplotlib.use('Agg')
+from matplotlib.figure import Figure
 
 class WebServer:
     def __init__(self, db, shared_state=None):
@@ -139,9 +144,34 @@ class WebServer:
             color: #ffffff;
             font-weight: bold;
         }
+        .modal {
+            display: none; position: fixed; z-index: 1000; left: 0; top: 0;
+            width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8);
+        }
+        .modal-content {
+            background-color: #111; margin: 10% auto; padding: 20px;
+            border: 1px solid #00ff00; width: 80%; max-width: 600px;
+            color: #00ff00; font-family: monospace;
+        }
+        .close {
+            color: #00ff00; float: right; font-size: 28px; font-weight: bold; cursor: pointer;
+        }
+        .close:hover { color: #ffffff; }
+        .details-table th { width: 40%; text-align: left; }
+        .details-table td { word-break: break-all; }
     </style>
 </head>
 <body>
+    <div id="apModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="document.getElementById('apModal').style.display='none'">&times;</span>
+            <h2 id="modal-title" style="border-bottom:1px solid #00ff00; margin-top:0;">Szczegóły Sieci</h2>
+            <table class="details-table" style="width: 100%; margin-top: 15px;">
+                <tbody id="modal-body">
+                </tbody>
+            </table>
+        </div>
+    </div>
     <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid #00ff00; padding-bottom: 10px; margin-bottom: 15px;">
         <div>
             <h1 style="border: none; margin: 0; padding: 0;">BetterCup WiFi Console</h1>
@@ -157,7 +187,7 @@ class WebServer:
     <div class="stats-box">
         <span class="stat-group">
             <strong>STATUS:</strong>
-            <span id="status-dot" class="status-dot pulse-green"></span>
+
             <span id="status-spinner" class="status-spinner">[/]</span>
             <span id="pwn-status" style="color: #00ff00; font-weight: bold;">Inicjalizacja...</span>
         </span>
@@ -190,6 +220,7 @@ class WebServer:
     <div class="control-panel">
         <button id="btn-view-active" class="active" onclick="switchView('active')">[ AKTYWNE SIECI ]</button>
         <button id="btn-view-database" onclick="switchView('database')">[ BAZA DANYCH ]</button>
+        <button id="btn-view-stats" onclick="switchView('stats')">[ STATYSTYKI ]</button>
         
         <input type="text" id="search-bar" placeholder="Szukaj (BSSID, ESSID)..." style="flex-grow: 1;">
         
@@ -198,6 +229,16 @@ class WebServer:
             <option value="captured">Tylko przechwycone</option>
             <option value="new">Tylko nowe</option>
         </select>
+        
+        <label id="filter-today-container" style="display: none; align-items: center; color: #fff; cursor: pointer; user-select: none;">
+            <input type="checkbox" id="filter-today" style="margin-right: 5px;"> Tylko dzisiejsze
+        </label>
+        
+        <div id="pagination" style="display: none; align-items: center; gap: 10px;">
+            <button id="btn-prev-page" onclick="changePage(-1)">&#8592;</button>
+            <span id="page-info" style="color: #ffffff; font-weight: bold;">Str. 1</span>
+            <button id="btn-next-page" onclick="changePage(1)">&#8594;</button>
+        </div>
     </div>
 
     <table id="networks-table">
@@ -211,6 +252,22 @@ class WebServer:
         </tbody>
     </table>
 
+    <!-- Widok Statystyk -->
+    <div id="stats-view" style="display: none; padding: 20px;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <div style="background-color: #ffffff; padding: 15px; border-radius: 8px; text-align: center;">
+                <h3 style="margin-top: 0; color: #000000;">Nowe Sieci (Ostatnie 14 Dni)</h3>
+                <img id="chart-dates" src="" style="max-width: 100%; height: auto; display: none;" />
+                <div id="chart-dates-loading" style="color: #666;">Generowanie wykresu...</div>
+            </div>
+            <div style="padding: 15px; border: 1px solid #333; border-radius: 8px; text-align: left;">
+                <h3 style="margin-top: 0; color: #00ff00; border-bottom: 1px solid #333; padding-bottom: 10px;">Producenci (Wszyscy)</h3>
+                <pre id="text-vendors" style="display: none; color: #00ff00; font-family: monospace; font-size: 14px; max-height: 380px; overflow-y: auto; margin: 0;"></pre>
+                <div id="chart-vendors-loading" style="color: #666; font-family: monospace;">Ładowanie danych...</div>
+            </div>
+        </div>
+    </div>
+
     <script>
         const searchBar = document.getElementById('search-bar');
         const statusFilter = document.getElementById('status-filter');
@@ -223,13 +280,107 @@ class WebServer:
         const pwnStatus = document.getElementById('pwn-status');
 
         let currentView = 'active';
+        let currentPage = 1;
+        let sortCol = 'default';
+        let sortDir = 'desc';
+
+        function setSort(col) {
+            if (sortCol === col) {
+                sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortCol = col;
+                sortDir = 'asc';
+            }
+            fetchAPs();
+        }
+
+        function getSortIcon(col) {
+            if (sortCol !== col) return ' <span style="color:#555">⇅</span>';
+            return sortDir === 'asc' ? ' <span style="color:#00ff00">↑</span>' : ' <span style="color:#00ff00">↓</span>';
+        }
+
 
         function switchView(view) {
             currentView = view;
+            currentPage = 1;
+            const pageInfo = document.getElementById('page-info');
+            if (pageInfo) pageInfo.innerText = `Str. ${currentPage}`;
+            
             document.getElementById('btn-view-active').classList.toggle('active', view === 'active');
             document.getElementById('btn-view-database').classList.toggle('active', view === 'database');
-            viewTitle.innerText = view === 'active' ? 'Aktywne sieci (w locie)' : 'Zapisane w bazie';
-            fetchAPs();
+            document.getElementById('btn-view-stats').classList.toggle('active', view === 'stats');
+            
+            const paginationEl = document.getElementById('pagination');
+            if (paginationEl) paginationEl.style.display = view === 'database' ? 'flex' : 'none';
+            
+            // Pokaż/ukryj odpowiednie elementy
+            document.getElementById('networks-table').style.display = view === 'stats' ? 'none' : 'table';
+            searchBar.style.display = view === 'stats' ? 'none' : 'block';
+            statusFilter.style.display = view === 'stats' ? 'none' : 'block';
+            
+            const filterTodayEl = document.getElementById('filter-today-container');
+            if (filterTodayEl) filterTodayEl.style.display = view === 'database' ? 'flex' : 'none';
+            
+            document.getElementById('stats-view').style.display = view === 'stats' ? 'block' : 'none';
+            
+            if (view === 'active') {
+                viewTitle.innerText = 'Aktywne sieci (w locie)';
+                fetchAPs();
+            } else if (view === 'database') {
+                viewTitle.innerText = 'Zapisane w bazie';
+                fetchAPs();
+            } else if (view === 'stats') {
+                viewTitle.innerText = 'Statystyki i Wykresy';
+                fetchDashboardStats();
+            }
+        }
+        
+        function changePage(delta) {
+            const btnNext = document.getElementById('btn-next-page');
+            if (delta === 1 && btnNext && btnNext.disabled) return;
+            const btnPrev = document.getElementById('btn-prev-page');
+            if (delta === -1 && btnPrev && btnPrev.disabled) return;
+            
+            if (currentPage + delta > 0) {
+                currentPage += delta;
+                document.getElementById('page-info').innerText = `Str. ${currentPage}`;
+                fetchAPs();
+            }
+        }
+
+        async function showApDetails(bssid) {
+            try {
+                const res = await fetch(`/api/ap?bssid=${bssid}`);
+                const data = await res.json();
+                if (data.error) {
+                    alert('Błąd: ' + data.error);
+                    return;
+                }
+                
+                document.getElementById('modal-title').innerText = `Szczegóły Sieci: ${data.essid || '<ukryty>'}`;
+                
+                let html = '';
+                for (const [key, value] of Object.entries(data)) {
+                    let displayValue = value !== null ? value : '-';
+                    
+                    // Formatowanie czasu UNIX (last_attacked_at jest w sekundach)
+                    if (key === 'last_attacked_at') {
+                        if (value > 0) {
+                            displayValue = new Date(value * 1000).toLocaleString('pl-PL');
+                        } else {
+                            displayValue = 'Nigdy';
+                        }
+                    }
+                    
+                    html += `<tr><th style="color: #1f940b;">${key.toUpperCase()}</th><td>${displayValue}</td></tr>`;
+                }
+                
+                document.getElementById('modal-body').innerHTML = html;
+                document.getElementById('apModal').style.display = 'block';
+            } catch (err) {
+                console.error(err);
+                alert('Błąd podczas pobierania szczegółów.');
+            }
         }
 
         // Mappings from ASCII states to Text Status Labels
@@ -317,8 +468,22 @@ class WebServer:
             try {
                 const search = encodeURIComponent(searchBar.value);
                 const status = statusFilter.value;
-                const res = await fetch(`/api/aps?view=${currentView}&search=${search}&status=${status}`);
+                const today = document.getElementById('filter-today').checked;
+                const res = await fetch(`/api/aps?view=${currentView}&search=${search}&status=${status}&today=${today}&page=${currentPage}&sort=${sortCol}&dir=${sortDir}`);
                 const aps = await res.json();
+
+                if (currentView === 'database') {
+                    const btnNext = document.getElementById('btn-next-page');
+                    if (btnNext) {
+                        btnNext.disabled = aps.length < 100;
+                        btnNext.style.opacity = aps.length < 100 ? '0.5' : '1';
+                    }
+                    const btnPrev = document.getElementById('btn-prev-page');
+                    if (btnPrev) {
+                        btnPrev.disabled = currentPage <= 1;
+                        btnPrev.style.opacity = currentPage <= 1 ? '0.5' : '1';
+                    }
+                }
 
                 const thead = document.getElementById('networks-table').querySelector('thead');
                 if (currentView === 'active') {
@@ -328,8 +493,8 @@ class WebServer:
                             <th>SIGNAL</th>
                             <th>BRAIN</th>
                             <th>BSSID</th>
-                            <th>ESSID</th>
-                            <th>PRODUCENT</th>
+                            <th onclick="setSort('essid')" style="cursor: pointer;" title="Sortuj">ESSID${getSortIcon('essid')}</th>
+                            <th onclick="setSort('vendor')" style="cursor: pointer;" title="Sortuj">PRODUCENT${getSortIcon('vendor')}</th>
                             <th>CH</th>
                             <th>ENC</th>
                             <th>CLI</th>
@@ -340,12 +505,12 @@ class WebServer:
                 } else {
                     thead.innerHTML = `
                         <tr>
-                            <th style="width: 40px;">#</th>
+                            <th style="width: 50px; color: #00ff00;">ID</th>
                             <th>BSSID</th>
-                            <th>ESSID</th>
-                            <th>PRODUCENT</th>
+                            <th onclick="setSort('essid')" style="cursor: pointer;" title="Sortuj">ESSID${getSortIcon('essid')}</th>
+                            <th onclick="setSort('vendor')" style="cursor: pointer;" title="Sortuj">PRODUCENT${getSortIcon('vendor')}</th>
                             <th>STATUS</th>
-                            <th>OSTATNIO</th>
+                            <th>DODANO</th>
                         </tr>
                     `;
                 }
@@ -400,12 +565,12 @@ class WebServer:
                         `;
                     } else {
                         tr.innerHTML = `
-                            <td style="color: #888;">${idx + 1}</td>
+                            <td style="color: #00ff00; font-weight: bold; cursor: pointer; text-decoration: underline;" onclick="showApDetails('${ap.bssid}')" title="Pokaż szczegóły">${ap.id || '-'}</td>
                             <td>${ap.bssid}</td>
                             <td class="${statusClass}">${ap.essid || '<ukryty>'}</td>
                             <td>${ap.vendor || 'UNKNOWN'}</td>
                             <td class="${statusClass}">${statusText}</td>
-                            <td>${ap.last_seen || '-'}</td>
+                            <td>${ap.first_seen || '-'}</td>
                         `;
                     }
                     networksTbody.appendChild(tr);
@@ -424,6 +589,7 @@ class WebServer:
         });
 
         statusFilter.addEventListener('change', fetchAPs);
+        document.getElementById('filter-today').addEventListener('change', fetchAPs);
 
         // Spinner animation setup - Restored classic terminal spinner, pure ASCII text, 100% layout stable
         // Note: 4 backslashes in Python source compiles to 2 backslashes in HTML, which JS parses as a single backslash '\'
@@ -438,10 +604,46 @@ class WebServer:
             }
         }, 150);
 
+        async function fetchDashboardStats() {
+            if (currentView !== 'stats') return;
+            try {
+                // Pokaz ładowanie
+                ['dates'].forEach(id => {
+                    document.getElementById(`chart-${id}`).style.display = 'none';
+                    document.getElementById(`chart-${id}-loading`).style.display = 'block';
+                });
+                document.getElementById('text-vendors').style.display = 'none';
+                document.getElementById('chart-vendors-loading').style.display = 'block';
+
+                const res = await fetch('/api/dashboard_stats');
+                const data = await res.json();
+                
+                // Ustaw obrazki
+                if (data.chart_dates) {
+                    const img = document.getElementById('chart-dates');
+                    img.src = data.chart_dates;
+                    img.style.display = 'inline-block';
+                    document.getElementById('chart-dates-loading').style.display = 'none';
+                }
+                if (data.vendors) {
+                    const container = document.getElementById('text-vendors');
+                    let text = '';
+                    for (const v of data.vendors) {
+                        text += `[ ${v.count.toString().padStart(4, ' ')} ]  ${v.vendor}\n`;
+                    }
+                    container.innerText = text;
+                    container.style.display = 'block';
+                    document.getElementById('chart-vendors-loading').style.display = 'none';
+                }
+            } catch (err) {
+                console.error("Błąd ładowania statystyk:", err);
+            }
+        }
+
         fetchStats();
         fetchAPs();
         setInterval(fetchStats, 1000);
-        setInterval(fetchAPs, 5000);
+        setInterval(() => { if (currentView !== 'stats') fetchAPs(); }, 5000);
     </script>
 </body>
 </html>"""
@@ -489,7 +691,15 @@ class WebServer:
         query_params = request.query
         search = query_params.get('search', '').strip().lower()
         status_filter = query_params.get('status', '').strip()
+        today_filter = query_params.get('today', 'false') == 'true'
         view = query_params.get('view', 'active').strip()
+        try:
+            page = int(query_params.get('page', 1))
+        except ValueError:
+            page = 1
+        
+        sort_col = query_params.get('sort', 'default').strip()
+        sort_dir = query_params.get('dir', 'desc').strip()
         
         if view == 'active':
             active_aps = await self.db.get_active_aps_with_status()
@@ -509,11 +719,17 @@ class WebServer:
                     if status_filter == 'new' and ap['status'] != 'nowy':
                         continue
                 filtered_aps.append(ap)
+                
+            if sort_col == 'essid':
+                filtered_aps.sort(key=lambda x: (x.get('essid') or '').lower(), reverse=(sort_dir == 'desc'))
+            elif sort_col == 'vendor':
+                filtered_aps.sort(key=lambda x: (x.get('vendor') or '').lower(), reverse=(sort_dir == 'desc'))
+                
             return web.json_response(filtered_aps)
             
         async with aiosqlite.connect(self.db_path) as conn:
             conn.row_factory = aiosqlite.Row
-            sql = "SELECT bssid, essid, vendor, status, last_seen FROM handshakes"
+            sql = "SELECT id, bssid, essid, vendor, status, first_seen FROM handshakes"
             args = []
             
             conditions = []
@@ -527,10 +743,24 @@ class WebServer:
                 elif status_filter == 'new':
                     conditions.append("status = 'nowy'")
             
+            if today_filter:
+                date_str = datetime.now().strftime("%Y-%m-%d")
+                conditions.append("first_seen LIKE ?")
+                args.append(f"{date_str}%")
+            
             if conditions:
                 sql += " WHERE " + " AND ".join(conditions)
                 
-            sql += " ORDER BY last_seen DESC LIMIT 100"
+            limit = 100
+            offset = (page - 1) * limit
+            
+            order_clause = "id DESC"
+            if sort_col == 'essid':
+                order_clause = f"essid {'DESC' if sort_dir == 'desc' else 'ASC'}"
+            elif sort_col == 'vendor':
+                order_clause = f"vendor {'DESC' if sort_dir == 'desc' else 'ASC'}"
+                
+            sql += f" ORDER BY {order_clause} LIMIT {limit} OFFSET {offset}"
             
             async with conn.execute(sql, args) as cursor:
                 rows = await cursor.fetchall()
@@ -554,3 +784,67 @@ class WebServer:
                     aps.append(ap)
                 
         return web.json_response(aps)
+
+    async def get_ap_details(self, request):
+        bssid = request.query.get('bssid', '').strip()
+        if not bssid:
+            return web.json_response({"error": "No bssid provided"})
+            
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute("SELECT * FROM handshakes WHERE bssid = ?", (bssid,)) as cursor:
+                row = await cursor.fetchone()
+                if row:
+                    return web.json_response(dict(row))
+                else:
+                    return web.json_response({"error": "Network not found"})
+
+    def _generate_plot_base64(self, fig):
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', bbox_inches='tight', facecolor='white', edgecolor='none')
+        buf.seek(0)
+        img_str = base64.b64encode(buf.read()).decode('utf-8')
+        return f"data:image/png;base64,{img_str}"
+
+    def _apply_light_theme(self, ax):
+        ax.set_facecolor('white')
+        ax.tick_params(colors='black')
+        for spine in ax.spines.values():
+            spine.set_color('black')
+        ax.xaxis.label.set_color('black')
+        ax.yaxis.label.set_color('black')
+        ax.title.set_color('black')
+        ax.yaxis.grid(True, linestyle='-', color='#d1d5db')
+
+    async def get_dashboard_stats(self, request):
+        chart_dates = ""
+        
+        async with aiosqlite.connect(self.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            
+            # Vendors (All)
+            async with conn.execute("SELECT vendor, COUNT(*) as count FROM handshakes WHERE vendor != '' AND vendor IS NOT NULL GROUP BY vendor ORDER BY count DESC") as cursor:
+                vendor_data = [dict(row) for row in await cursor.fetchall()]
+                
+            # New networks per day (last 14 days)
+            async with conn.execute("SELECT substr(first_seen, 1, 10) as date, COUNT(*) as count FROM handshakes WHERE first_seen IS NOT NULL AND first_seen != '' GROUP BY date ORDER BY date DESC LIMIT 14") as cursor:
+                date_data_raw = [dict(row) for row in await cursor.fetchall()]
+                date_data = list(reversed(date_data_raw))
+                if date_data:
+                    fig = Figure(figsize=(6, 4))
+                    ax = fig.subplots()
+                    self._apply_light_theme(ax)
+                    dates = [d['date'][5:] for d in date_data] # MM-DD
+                    counts = [d['count'] for d in date_data]
+                    ax.scatter(dates, counts, color='#ef4444', edgecolors='black', s=40, zorder=3)
+                    ax.set_title('Nowe sieci (ost. 14 dni)')
+                    ax.tick_params(axis='x', rotation=45)
+                    for label in ax.get_xticklabels():
+                        label.set_ha('right')
+                    fig.subplots_adjust(bottom=0.2)
+                    chart_dates = self._generate_plot_base64(fig)
+
+        return web.json_response({
+            'chart_dates': chart_dates,
+            'vendors': vendor_data
+        })
