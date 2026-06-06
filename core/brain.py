@@ -12,9 +12,27 @@ class Brain:
         self.in_attack_queue = set()
         self.running = True
 
-    def is_wpa3(self, ap_data):
-        enc = str(ap_data.get('encryption', '')).upper()
-        return 'WPA3' in enc or 'SAE' in enc
+    def _normalize_encryption(self, enc_raw):
+        """Normalizuje pole encryption z Bettercap (może być listą, stringiem, None)."""
+        if enc_raw is None:
+            return ''
+        if isinstance(enc_raw, list):
+            return ', '.join(str(e) for e in enc_raw)
+        return str(enc_raw)
+
+    def is_wpa3_only(self, ap_data):
+        """Zwraca True TYLKO jeśli sieć jest czysto WPA3 (SAE-only).
+        Sieci w transition mode (WPA2+WPA3) są traktowane jak WPA2 — atakiwalne."""
+        enc = self._normalize_encryption(ap_data.get('encryption', '')).upper()
+        has_wpa3 = 'WPA3' in enc or 'SAE' in enc
+        has_wpa2 = 'WPA2' in enc or 'PSK' in enc
+        
+        # Transition mode = ma oba → atakiwalne jak WPA2
+        if has_wpa3 and has_wpa2:
+            return False
+        
+        # Czyste WPA3 → nieatakiwalne
+        return has_wpa3
 
     async def process_events(self):
         """Konsument zdejmujący wydarzenia ze stosu Event Queue"""
@@ -48,7 +66,7 @@ class Brain:
         vendor = ap.get('vendor', '')
         rssi = ap.get('rssi', -100)
         channel = ap.get('channel', 1)
-        encryption = ap.get('encryption', '')
+        encryption = self._normalize_encryption(ap.get('encryption', ''))
         clients = ap.get('clients')
         
         gps_lat = ap.get('gps_lat', data.get('gps_lat'))
@@ -73,7 +91,7 @@ class Brain:
         
         status = db_info.get('status')
         if status in ['przechwycono', 'pmkid_przechwycono', 'zbanowany']: return
-        if self.is_wpa3(ap): return
+        if self.is_wpa3_only(ap): return
         
         # Deduplikacja
         if bssid in self.in_attack_queue: return
