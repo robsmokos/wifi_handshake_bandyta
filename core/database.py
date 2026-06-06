@@ -117,6 +117,32 @@ class Database:
                 # Nie nadpisujemy znanej nazwy sieci ogólnym znacznikiem ukrycia
                 is_current_hidden = ap['essid'] in (None, "", "<ukryty>", "<ukryte>", "ukryta")
                 is_new_hidden = essid in (None, "", "<ukryty>", "<ukryte>", "ukryta")
+                
+                # Wykrycie odzyskania ukrytego ESSID
+                if is_current_hidden and not is_new_hidden:
+                    old_essid = ap['essid']
+                    
+                    # Zmiana nazw plików handshake, jeśli istnieją
+                    bssid_file_name = bssid.replace(":", "-")
+                    old_essid_safe = "".join([c for c in str(old_essid or 'ukryta') if c.isalnum() or c in ('_', '-')]).strip()
+                    if not old_essid_safe:
+                        old_essid_safe = "ukryta"
+                        
+                    new_essid_safe = "".join([c for c in str(essid) if c.isalnum() or c in ('_', '-')]).strip()
+                    if not new_essid_safe:
+                        new_essid_safe = "ukryta"
+                    
+                    pcap_dir = "handshakes"
+                    for ext in ['.pcap', '.hc22000']:
+                        old_path = os.path.join(pcap_dir, f"{old_essid_safe}_{bssid_file_name}{ext}")
+                        new_path = os.path.join(pcap_dir, f"{new_essid_safe}_{bssid_file_name}{ext}")
+                        if os.path.exists(old_path):
+                            try:
+                                os.rename(old_path, new_path)
+                                print(f"\n[Database] Zmieniono nazwe pliku po odzyskaniu ESSID: {old_path} -> {new_path}")
+                            except Exception as e:
+                                print(f"\n[Database] Blad podczas zmiany nazwy pliku handshake: {e}")
+
                 if is_current_hidden or not is_new_hidden:
                     ap['essid'] = essid
             if vendor and ap['vendor'] != vendor: ap['vendor'] = vendor

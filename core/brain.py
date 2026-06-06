@@ -112,8 +112,12 @@ class Brain:
                 # Kara za obsesyjne atakowanie: max do -180 punktów
                 cooldown_penalty = (180 - time_since_attack)
                 
+        # Sprawdzenie czy sieć jest ukryta
+        is_hidden = essid in (None, "", "<ukryty>", "<ukryte>", "ukryta")
+        bonus_hidden = 150 if (is_hidden and client_count > 0) else 0
+        
         # Główny algorytm (RSSI jest ujemne!)
-        score = (client_count * 5) + rssi + bonus_nowej_sieci - (capped_failures * 10) - cooldown_penalty
+        score = (client_count * 5) + rssi + bonus_nowej_sieci + bonus_hidden - (capped_failures * 10) - cooldown_penalty
         
         # Ignoruj kompletnie tragiczne wyniki
         # Próg -200 zamiast -150 by nie odcinać słabych sieci bez historii
