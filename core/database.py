@@ -12,6 +12,9 @@ class Database:
         self.last_flush = time.time()
         self.flush_interval = 30  # Większy interval by nie męczyć karty SD
         self.lock = asyncio.Lock()
+        # Tracker tempa odkryć nowych sieci (timestampy first_seen, max 10 min)
+        self.discovery_timestamps = []
+        self.known_bssids = set()
 
     async def init_db(self):
         async with aiosqlite.connect(self.db_path) as conn:
@@ -32,11 +35,36 @@ class Database:
                     last_attacked_at REAL DEFAULT 0,
                     liczba_atakow_deauth INTEGER DEFAULT 0,
                     liczba_atakow_pmkid INTEGER DEFAULT 0,
+                    liczba_atakow_pixiedust INTEGER DEFAULT 0,
                     status TEXT DEFAULT 'nowy',
+                    encryption TEXT,
                     last_modified TEXT
                 )
             ''')
             await conn.commit()
+            
+            # Załaduj znane BSSIDy aby tracker odkryć wiedział co jest "nowe"
+            try:
+                async with conn.execute("SELECT bssid FROM handshakes") as cursor:
+                    rows = await cursor.fetchall()
+                    self.known_bssids = {row[0] for row in rows}
+                
+                # Seed discovery_timestamps z ostatnich 10 minut (przetrwa restart)
+                from datetime import timedelta
+                cutoff = (datetime.now() - timedelta(minutes=10)).strftime("%Y-%m-%d %H:%M:%S")
+                async with conn.execute(
+                    "SELECT first_seen FROM handshakes WHERE first_seen >= ? ORDER BY first_seen ASC",
+                    (cutoff,)
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    for row in rows:
+                        try:
+                            dt = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S")
+                            self.discovery_timestamps.append(dt.timestamp())
+                        except (ValueError, TypeError):
+                            pass
+            except Exception:
+                pass
 
     async def get_ap(self, bssid):
         async with self.lock:
@@ -51,7 +79,7 @@ class Database:
                     return dict(row)
                 return None
 
-    async def update_ap(self, bssid, essid=None, vendor=None, gps_lat=None, gps_lon=None):
+    async def update_ap(self, bssid, essid=None, vendor=None, gps_lat=None, gps_lon=None, encryption=None):
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         # Pobranie rekordu BEZ użycia locka (zapobiega to zakleszczeniu reentrant asyncio.Lock)
@@ -73,9 +101,14 @@ class Database:
                         'czas_przechwycenia': None,
                         'last_attacked_at': 0.0,
                         'liczba_atakow_deauth': 0, 'liczba_atakow_pmkid': 0,
+                        'liczba_atakow_pixiedust': 0,
                         'status': 'nowy',
+                        'encryption': encryption,
                         'last_modified': now_str
                     }
+                    # Nowa sieć — rejestruj odkrycie
+                    self.discovery_timestamps.append(time.time())
+                    self.known_bssids.add(bssid)
                     
             ap = self.pending_updates[bssid]
             ap['last_seen'] = now_str
@@ -89,6 +122,7 @@ class Database:
             if vendor and ap['vendor'] != vendor: ap['vendor'] = vendor
             if gps_lat is not None: ap['gps_lat'] = gps_lat
             if gps_lon is not None: ap['gps_lon'] = gps_lon
+            if encryption and ap.get('encryption') != encryption: ap['encryption'] = encryption
             
         await self.check_flush()
 
@@ -110,7 +144,31 @@ class Database:
                     ap['liczba_atakow_deauth'] += 1
                 elif attack_type == "pmkid":
                     ap['liczba_atakow_pmkid'] += 1
+                elif attack_type == "pixiedust":
+                    ap['liczba_atakow_pixiedust'] = ap.get('liczba_atakow_pixiedust', 0) + 1
                     
+        await self.check_flush()
+
+    async def reset_attacks(self, bssid):
+        existing = await self.get_ap(bssid)
+        if not existing:
+            return
+            
+        async with self.lock:
+            if bssid not in self.pending_updates:
+                if existing:
+                    if 'last_modified' not in existing or existing['last_modified'] is None:
+                        existing['last_modified'] = existing.get('last_seen', '')
+                    self.pending_updates[bssid] = existing
+                
+            if bssid in self.pending_updates:
+                ap = self.pending_updates[bssid]
+                ap['liczba_atakow_deauth'] = 0
+                ap['liczba_atakow_pmkid'] = 0
+                ap['liczba_atakow_pixiedust'] = 0
+                ap['last_attacked_at'] = 0.0
+                ap['last_modified'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
         await self.check_flush()
 
     async def update_status(self, bssid, status):
@@ -131,6 +189,21 @@ class Database:
                     ap['czas_przechwycenia'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
         await self.check_flush()
+
+    async def delete_ap(self, bssid):
+        async with self.lock:
+            # Usuniecie z buforow pamieci
+            if bssid in self.pending_updates:
+                del self.pending_updates[bssid]
+            if bssid in self.active_aps:
+                del self.active_aps[bssid]
+            if bssid in self.known_bssids:
+                self.known_bssids.discard(bssid)
+                
+        # Natychmiastowe usuniecie z bazy sqlite
+        async with aiosqlite.connect(self.db_path) as conn:
+            await conn.execute("DELETE FROM handshakes WHERE bssid = ?", (bssid,))
+            await conn.commit()
 
     async def check_flush(self):
         if time.time() - self.last_flush >= self.flush_interval:
@@ -155,8 +228,8 @@ class Database:
                         INSERT INTO handshakes (
                             bssid, essid, vendor, first_seen, last_seen, 
                             gps_lat, gps_lon, czas_przechwycenia,
-                            last_attacked_at, liczba_atakow_deauth, liczba_atakow_pmkid, status, last_modified
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            last_attacked_at, liczba_atakow_deauth, liczba_atakow_pmkid, liczba_atakow_pixiedust, status, encryption, last_modified
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(bssid) DO UPDATE SET
                             essid=excluded.essid,
                             vendor=excluded.vendor,
@@ -167,12 +240,15 @@ class Database:
                             last_attacked_at=excluded.last_attacked_at,
                             liczba_atakow_deauth=excluded.liczba_atakow_deauth,
                             liczba_atakow_pmkid=excluded.liczba_atakow_pmkid,
+                            liczba_atakow_pixiedust=excluded.liczba_atakow_pixiedust,
                             status=excluded.status,
+                            encryption=excluded.encryption,
                             last_modified=excluded.last_modified
                     ''', (
                         data['bssid'], data['essid'], data['vendor'], data['first_seen'], data['last_seen'],
                         data['gps_lat'], data['gps_lon'], data['czas_przechwycenia'],
-                        data['last_attacked_at'], data['liczba_atakow_deauth'], data['liczba_atakow_pmkid'], data['status'], data.get('last_modified')
+                        data['last_attacked_at'], data['liczba_atakow_deauth'], data['liczba_atakow_pmkid'],
+                        data.get('liczba_atakow_pixiedust', 0), data['status'], data.get('encryption'), data.get('last_modified')
                     ))
                 await conn.commit()
         except Exception as e:
@@ -183,6 +259,47 @@ class Database:
                     bssid = item['bssid']
                     if bssid not in self.pending_updates:
                         self.pending_updates[bssid] = item
+
+    def get_discovery_rate(self):
+        """Zwraca (rate_per_min, trend_arrow, seconds_since_last).
+        
+        rate_per_min: ilość nowych sieci/min w ostatnich 5 minutach
+        trend_arrow: '▲' jeśli ostatnie 2.5 min lepsze, '▼' jeśli gorsze, '—' jeśli stabilne
+        seconds_since_last: sekundy od ostatniego odkrycia nowej sieci (None jeśli brak danych)
+        """
+        now = time.time()
+        window = 600  # 10 minut max historia
+        half = 300    # 5 minut na obliczenie rate
+        quarter = 150 # 2.5 min na trend
+        
+        # Wyczyść stare timestampy (starsze niż 10 min)
+        self.discovery_timestamps = [t for t in self.discovery_timestamps if now - t <= window]
+        
+        # Sekundy od ostatniego odkrycia
+        if self.discovery_timestamps:
+            seconds_since_last = now - self.discovery_timestamps[-1]
+        elif self.known_bssids:
+            # Baza istnieje ale żadnych nowych odkryć w tej sesji / ostatnich 10 min
+            seconds_since_last = float('inf')
+        else:
+            seconds_since_last = None
+        
+        # Rate: nowe sieci w ostatnich 5 minutach, przeliczone na /min
+        recent = [t for t in self.discovery_timestamps if now - t <= half]
+        rate = (len(recent) / half) * 60 if recent else 0.0
+        
+        # Trend: porównanie ostatnich 2.5 min vs poprzednich 2.5 min
+        recent_quarter = [t for t in self.discovery_timestamps if now - t <= quarter]
+        prev_quarter = [t for t in self.discovery_timestamps if quarter < now - t <= half]
+        
+        if len(recent_quarter) > len(prev_quarter):
+            trend = '\u25b2'  # ▲
+        elif len(recent_quarter) < len(prev_quarter):
+            trend = '\u25bc'  # ▼
+        else:
+            trend = '\u2014'  # —
+        
+        return round(rate, 1), trend, seconds_since_last
 
     async def get_stats(self):
         """Zwraca (total_ap, captured_ap) uwzględniając niezapisane dane z pamięci."""
@@ -259,9 +376,21 @@ class Database:
         except Exception:
             return []
 
-    async def update_active_ap(self, bssid, essid, vendor, rssi, channel, encryption, clients):
+    async def update_active_ap(self, bssid, essid, vendor, rssi, channel, encryption, clients, wps):
         async with self.lock:
-            client_count = len(clients) if isinstance(clients, (list, dict)) else 0
+            # Preserve existing client count if we don't have clients in this update
+            if clients is None:
+                existing = self.active_aps.get(bssid)
+                client_count = existing['client_count'] if existing else 0
+            else:
+                client_count = len(clients) if isinstance(clients, (list, dict)) else 0
+            
+            wps_str = "NIE"
+            if isinstance(wps, dict) and wps:
+                version = wps.get('Version', '')
+                wps_str = f"TAK ({version})" if version else "TAK"
+            elif wps:
+                wps_str = "TAK"
             
             enc_str = ""
             if isinstance(encryption, list):
@@ -277,6 +406,7 @@ class Database:
                 'channel': channel,
                 'encryption': enc_str,
                 'client_count': client_count,
+                'wps': wps_str,
                 'last_seen_time': time.time()
             }
 
@@ -298,7 +428,7 @@ class Database:
             conn.row_factory = aiosqlite.Row
             bssids = [ap['bssid'] for ap in active_list]
             placeholders = ','.join('?' * len(bssids))
-            sql = f"SELECT bssid, status, liczba_atakow_deauth, liczba_atakow_pmkid, last_attacked_at FROM handshakes WHERE bssid IN ({placeholders})"
+            sql = f"SELECT bssid, status, liczba_atakow_deauth, liczba_atakow_pmkid, liczba_atakow_pixiedust, last_attacked_at FROM handshakes WHERE bssid IN ({placeholders})"
             
             db_status = {}
             try:
@@ -314,19 +444,24 @@ class Database:
                 ap['status'] = status_info.get('status', 'nowy')
                 ap['liczba_atakow_deauth'] = status_info.get('liczba_atakow_deauth', 0)
                 ap['liczba_atakow_pmkid'] = status_info.get('liczba_atakow_pmkid', 0)
+                ap['liczba_atakow_pixiedust'] = status_info.get('liczba_atakow_pixiedust', 0)
                 
-                # Dynamic Brain Score Calculation matching brain.py
-                failures = ap['liczba_atakow_deauth'] + ap['liczba_atakow_pmkid']
-                bonus_nowej_sieci = 20 if failures == 0 else 0
-                
-                last_attack = status_info.get('last_attacked_at', 0.0) or 0.0
-                time_since_attack = time.time() - last_attack
-                cooldown_penalty = 0.0
-                if last_attack > 0.0 and time_since_attack < 180.0:
-                    cooldown_penalty = (180.0 - time_since_attack)
-                
-                score = (ap['client_count'] * 5) + ap['rssi'] + bonus_nowej_sieci - (failures * 10) - cooldown_penalty
-                ap['score'] = round(score, 1)
+                # Pomiń obliczanie Brain Score dla zbanowanych sieci
+                if ap['status'] == 'zbanowany':
+                    ap['score'] = '-'
+                else:
+                    # Dynamic Brain Score Calculation matching brain.py
+                    failures = ap['liczba_atakow_deauth'] + ap['liczba_atakow_pmkid']
+                    bonus_nowej_sieci = 20 if failures == 0 else 0
+                    
+                    last_attack = status_info.get('last_attacked_at', 0.0) or 0.0
+                    time_since_attack = time.time() - last_attack
+                    cooldown_penalty = 0.0
+                    if last_attack > 0.0 and time_since_attack < 180.0:
+                        cooldown_penalty = (180.0 - time_since_attack)
+                    
+                    score = (ap['client_count'] * 5) + ap['rssi'] + bonus_nowej_sieci - (failures * 10) - cooldown_penalty
+                    ap['score'] = round(score, 1)
                 
                 bssid_file_name = ap['bssid'].replace(":", "-")
                 essid_safe = "".join([c for c in str(ap['essid'] or '') if c.isalnum() or c in ('_', '-')]).strip()

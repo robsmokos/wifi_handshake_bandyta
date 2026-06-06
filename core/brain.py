@@ -31,6 +31,10 @@ class Brain:
                 logging.error(f"Brain Error: {e}")
 
     async def handle_event(self, event):
+        tag = event.get('tag', '')
+        if tag.startswith('wifi.client.'):
+            return  # Ignoruj surowe eventy klienta by nie traktować ich jako AP
+            
         data = event.get('data', {})
         if not data: return
         
@@ -45,13 +49,13 @@ class Brain:
         rssi = ap.get('rssi', -100)
         channel = ap.get('channel', 1)
         encryption = ap.get('encryption', '')
-        clients = ap.get('clients', [])
+        clients = ap.get('clients')
         
         gps_lat = ap.get('gps_lat', data.get('gps_lat'))
         gps_lon = ap.get('gps_lon', data.get('gps_lon'))
         
         # 1. Zapis do DB (async) oraz do listy aktywnych sieci
-        await self.db.update_ap(bssid, essid=essid, vendor=vendor, gps_lat=gps_lat, gps_lon=gps_lon)
+        await self.db.update_ap(bssid, essid=essid, vendor=vendor, gps_lat=gps_lat, gps_lon=gps_lon, encryption=encryption)
         await self.db.update_active_ap(
             bssid=bssid,
             essid=essid,
@@ -59,7 +63,8 @@ class Brain:
             rssi=rssi,
             channel=channel,
             encryption=encryption,
-            clients=clients
+            clients=clients,
+            wps=ap.get('wps')
         )
         
         # 2. Pobranie najnowszych danych by przeliczyć Scoring
@@ -67,7 +72,7 @@ class Brain:
         if not db_info: return
         
         status = db_info.get('status')
-        if status in ['przechwycono', 'pmkid_przechwycono']: return
+        if status in ['przechwycono', 'pmkid_przechwycono', 'zbanowany']: return
         if self.is_wpa3(ap): return
         
         # Deduplikacja
@@ -77,6 +82,7 @@ class Brain:
         client_count = len(clients) if isinstance(clients, (list, dict)) else 0
         
         failures = db_info.get('liczba_atakow_deauth', 0) + db_info.get('liczba_atakow_pmkid', 0)
+        capped_failures = min(failures, 10) # Maksymalnie -100 pkt kary za fail
         bonus_nowej_sieci = 20 if failures == 0 else 0
         
         last_attack = db_info.get('last_attacked_at', 0)
@@ -89,7 +95,7 @@ class Brain:
                 cooldown_penalty = (180 - time_since_attack)
                 
         # Główny algorytm (RSSI jest ujemne!)
-        score = (client_count * 5) + rssi + bonus_nowej_sieci - (failures * 10) - cooldown_penalty
+        score = (client_count * 5) + rssi + bonus_nowej_sieci - (capped_failures * 10) - cooldown_penalty
         
         # Ignoruj kompletnie tragiczne wyniki
         # Próg -200 zamiast -150 by nie odcinać słabych sieci bez historii
@@ -98,7 +104,7 @@ class Brain:
         attack_type = None
         target_client = None
         
-        if client_count > 0:
+        if client_count > 0 and score <= 1000:
             attack_type = "deauth"
             target_client = None
             if isinstance(clients, dict) and clients:
@@ -116,10 +122,11 @@ class Brain:
                 else:
                     return
         else:
+            # Jeśli brak klientów lub score > 1000, nie robimy deauth (próbujemy PMKID)
             if db_info.get('liczba_atakow_pmkid', 0) < 3:
                 attack_type = "pmkid"
             else:
-                return  # Limit PMKID osiągnięty, brak klientów - sieć wyczerpana
+                return  # Limit PMKID osiągnięty, brak klientów lub wysoki score - sieć pominięta
                 
         if attack_type:
             # Budowa "Wyroku" dla Executora

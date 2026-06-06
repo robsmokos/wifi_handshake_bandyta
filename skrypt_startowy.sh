@@ -14,6 +14,7 @@ set api.rest.port 8081
 set api.rest.username kali
 set api.rest.password kali
 set wifi.recon.channel clear
+set wifi.recon.active true
 set wifi.handshakes.file handshakes/handshakes.pcap
 wifi.recon on
 api.rest on

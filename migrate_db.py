@@ -1,7 +1,7 @@
 import sqlite3
 import os
 
-db_path = '/home/kali/skanerb/handshakes.db'
+db_path = 'handshakes.db'
 if not os.path.exists(db_path):
     print("DB not found at", db_path)
     exit(0)
@@ -123,5 +123,32 @@ if 'sciezka_do_pliku' in columns:
             print("Migration 'sciezka_do_pliku' (rebuild) failed:", e2)
 else:
     print("Column 'sciezka_do_pliku' not present (OK).")
+
+# --- Krok 4: Dodaj kolumnę 'encryption' jeśli brakuje ---
+columns = get_columns()
+if 'encryption' not in columns:
+    print("Migrating database: adding 'encryption' column...")
+    try:
+        c.execute("ALTER TABLE handshakes ADD COLUMN encryption TEXT")
+        conn.commit()
+        print("Migration 'encryption': OK")
+    except Exception as e:
+        print("Migration 'encryption' failed:", e)
+else:
+    print("Database already has 'encryption' column.")
+
+# --- Krok 5: Dodaj kolumnę 'liczba_atakow_pixiedust' jeśli brakuje ---
+columns = get_columns()
+if 'liczba_atakow_pixiedust' not in columns:
+    print("Migrating database: adding 'liczba_atakow_pixiedust' column...")
+    try:
+        c.execute("ALTER TABLE handshakes ADD COLUMN liczba_atakow_pixiedust INTEGER DEFAULT 0")
+        c.execute("UPDATE handshakes SET liczba_atakow_pixiedust = 0 WHERE liczba_atakow_pixiedust IS NULL")
+        conn.commit()
+        print("Migration 'liczba_atakow_pixiedust': OK")
+    except Exception as e:
+        print("Migration 'liczba_atakow_pixiedust' failed:", e)
+else:
+    print("Database already has 'liczba_atakow_pixiedust' column.")
 
 conn.close()

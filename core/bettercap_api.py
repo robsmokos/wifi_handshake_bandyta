@@ -32,7 +32,9 @@ class BettercapAPI:
         return await self.run_command(f"wifi.recon.channel {channel}")
 
     async def send_deauth(self, bssid, client_mac):
-        return await self.run_command(f"wifi.deauth {bssid} {client_mac}")
+        # Bettercap woli jeden cel w wifi.deauth
+        target = client_mac if client_mac else bssid
+        return await self.run_command(f"wifi.deauth {target}")
 
     async def send_assoc(self, bssid):
         return await self.run_command(f"wifi.assoc {bssid}")

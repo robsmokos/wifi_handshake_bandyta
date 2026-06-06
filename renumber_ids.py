@@ -8,8 +8,8 @@ import shutil
 import os
 from datetime import datetime
 
-db_path = '/home/kali/skanerb/handshakes.db'
-backup_path = f'/home/kali/skanerb/handshakes_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db'
+db_path = 'handshakes.db'
+backup_path = f'handshakes_backup_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db'
 
 # Backup
 shutil.copy2(db_path, backup_path)

@@ -19,7 +19,7 @@ ssh ${kali_user}@${kali_ip} "mkdir -p $target_dir/core $target_dir/handshakes"
 Write-Host " "
 Write-Host "[2/2] Kopiowanie plikow zrodlowych przez SCP..."
 scp skrypt_startowy.sh main.py web.py requirements.txt plan_projektu.md ${kali_user}@${kali_ip}:${target_dir}/
-scp -r core/* ${kali_user}@${kali_ip}:${target_dir}/core/
+scp core/*.py ${kali_user}@${kali_ip}:${target_dir}/core/
 
 Write-Host " "
 Write-Host "============================================="

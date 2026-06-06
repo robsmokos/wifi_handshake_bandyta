@@ -170,6 +170,7 @@ class WebServer:
                 <tbody id="modal-body">
                 </tbody>
             </table>
+            <div id="modal-actions" style="margin-top: 20px; text-align: right;"></div>
         </div>
     </div>
     <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid #00ff00; padding-bottom: 10px; margin-bottom: 15px;">
@@ -212,6 +213,10 @@ class WebServer:
             <strong style="color: #1f940b;">RAM:</strong> <span id="stat-ram" style="color: #ffffff; font-weight: bold;">0.0%</span>
         </span>
         <span class="stat-sep">|</span>
+        <span class="stat-group">
+            <strong style="color: #1f940b;">TEMPO:</strong> <span id="stat-discovery-rate" style="color: #00ff00; font-weight: bold;">—</span>
+        </span>
+        <span class="stat-sep">|</span>
         <span id="stat-datetime" style="color: #666666; font-family: monospace; white-space: nowrap;">-</span>
     </div>
 
@@ -220,6 +225,7 @@ class WebServer:
     <div class="control-panel">
         <button id="btn-view-active" class="active" onclick="switchView('active')">[ AKTYWNE SIECI ]</button>
         <button id="btn-view-database" onclick="switchView('database')">[ BAZA DANYCH ]</button>
+        <button id="btn-view-banned" onclick="switchView('banned')">[ ZBANOWANE ]</button>
         <button id="btn-view-stats" onclick="switchView('stats')">[ STATYSTYKI ]</button>
         
         <input type="text" id="search-bar" placeholder="Szukaj (BSSID, ESSID)..." style="flex-grow: 1;">
@@ -255,7 +261,7 @@ class WebServer:
     <!-- Widok Statystyk -->
     <div id="stats-view" style="display: none; padding: 20px;">
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-            <div style="background-color: #ffffff; padding: 15px; border-radius: 8px; text-align: center;">
+            <div style="background-color: rgba(255, 255, 255, 0.4); padding: 15px; border-radius: 8px; text-align: center;">
                 <h3 style="margin-top: 0; color: #000000;">Nowe Sieci (Ostatnie 14 Dni)</h3>
                 <img id="chart-dates" src="" style="max-width: 100%; height: auto; display: none;" />
                 <div id="chart-dates-loading" style="color: #666;">Generowanie wykresu...</div>
@@ -308,6 +314,7 @@ class WebServer:
             
             document.getElementById('btn-view-active').classList.toggle('active', view === 'active');
             document.getElementById('btn-view-database').classList.toggle('active', view === 'database');
+            document.getElementById('btn-view-banned').classList.toggle('active', view === 'banned');
             document.getElementById('btn-view-stats').classList.toggle('active', view === 'stats');
             
             const paginationEl = document.getElementById('pagination');
@@ -316,7 +323,7 @@ class WebServer:
             // Pokaż/ukryj odpowiednie elementy
             document.getElementById('networks-table').style.display = view === 'stats' ? 'none' : 'table';
             searchBar.style.display = view === 'stats' ? 'none' : 'block';
-            statusFilter.style.display = view === 'stats' ? 'none' : 'block';
+            statusFilter.style.display = (view === 'stats' || view === 'banned') ? 'none' : 'block';
             
             const filterTodayEl = document.getElementById('filter-today-container');
             if (filterTodayEl) filterTodayEl.style.display = view === 'database' ? 'flex' : 'none';
@@ -328,6 +335,9 @@ class WebServer:
                 fetchAPs();
             } else if (view === 'database') {
                 viewTitle.innerText = 'Zapisane w bazie';
+                fetchAPs();
+            } else if (view === 'banned') {
+                viewTitle.innerText = 'Zbanowane sieci';
                 fetchAPs();
             } else if (view === 'stats') {
                 viewTitle.innerText = 'Statystyki i Wykresy';
@@ -376,10 +386,72 @@ class WebServer:
                 }
                 
                 document.getElementById('modal-body').innerHTML = html;
+                document.getElementById('modal-actions').innerHTML = `<button onclick="deleteNetwork('${data.bssid}')" style="background-color: #000; color: #ff3333; border: none; padding: 6px 12px; font-weight: bold; cursor: pointer; transition: all 0.2s; font-family: monospace;" onmouseover="this.style.backgroundColor='#ff3333'; this.style.color='#000';" onmouseout="this.style.backgroundColor='#000'; this.style.color='#ff3333';">USUŃ SIEĆ Z BAZY</button>`;
                 document.getElementById('apModal').style.display = 'block';
             } catch (err) {
                 console.error(err);
                 alert('Błąd podczas pobierania szczegółów.');
+            }
+        }
+
+        async function deleteNetwork(bssid) {
+            if (!confirm('CZY NA PEWNO CHCESZ CAŁKOWICIE USUNĄĆ TĘ SIEĆ Z BAZY?\\n\\nUsunięty zostanie tylko rekord z bazy danych. Pliki pcap pozostaną na dysku.')) return;
+            try {
+                const res = await fetch(`/api/delete?bssid=${bssid}`, { method: 'POST' });
+                if (res.ok) {
+                    document.getElementById('apModal').style.display = 'none';
+                    fetchAPs();
+                } else {
+                    alert('Wystąpił błąd podczas usuwania sieci.');
+                }
+            } catch(err) {
+                console.error(err);
+                alert('Błąd podczas nawiązywania połączenia z serwerem.');
+            }
+        }
+
+        async function resetScore(bssid) {
+            if (!confirm('Zresetować liczniki błędów i ponowić ataki dla ' + bssid + '?')) return;
+            try {
+                const res = await fetch(`/api/reset_attacks?bssid=${bssid}`, { method: 'POST' });
+                if (res.ok) {
+                    fetchAPs();
+                } else {
+                    alert('Wystąpił błąd podczas resetowania.');
+                }
+            } catch(err) {
+                console.error(err);
+            }
+        }
+
+        async function launchOneshot(bssid, essid) {
+            const label = essid ? `${essid} (${bssid})` : bssid;
+            if (!confirm(`Uruchomić atak WPS Pixie Dust na:\n${label}\n\noneshot.py -i wlan1 -b ${bssid} -K`)) return;
+            try {
+                const res = await fetch(`/api/oneshot?bssid=${encodeURIComponent(bssid)}`, { method: 'POST' });
+                const data = await res.json();
+                if (res.ok) {
+                    alert(`✅ Atak WPS uruchomiony!\nPID procesu: ${data.pid}\n\nSprawdź logi bettercap / konsolę tmux.`);
+                } else {
+                    alert(`❌ Błąd: ${data.error || 'Nieznany błąd'}`);
+                }
+            } catch(err) {
+                console.error(err);
+                alert('❌ Błąd połączenia z serwerem.');
+            }
+        }
+
+        async function toggleBan(bssid, isBanned) {
+            const endpoint = isBanned ? '/api/unban' : '/api/ban';
+            try {
+                const res = await fetch(`${endpoint}?bssid=${bssid}`, { method: 'POST' });
+                if (res.ok) {
+                    fetchAPs();
+                } else {
+                    alert('Wystąpił błąd podczas zmiany statusu banowania.');
+                }
+            } catch(err) {
+                console.error(err);
             }
         }
 
@@ -408,6 +480,44 @@ class WebServer:
                 if (statCpu) statCpu.innerText = (data.cpu || 0.0).toFixed(1) + '%';
                 if (statRam) statRam.innerText = (data.ram || 0.0).toFixed(1) + '%';
                 if (statDatetime) statDatetime.innerText = data.datetime || '';
+
+                // Discovery Rate Tempo Update
+                const statDisc = document.getElementById('stat-discovery-rate');
+                if (statDisc && data.discovery_rate !== undefined) {
+                    const rate = data.discovery_rate;
+                    const trend = data.discovery_trend || '\u2014';
+                    const sinceLast = data.seconds_since_last;
+                    
+                    let label = '';
+                    let color = '#00ff00';
+                    
+                    if (sinceLast === null) {
+                        // Pierwsza sesja, pusta baza — czekamy na dane
+                        label = 'CZEKAM...';
+                        color = '#555555';
+                    } else if (rate > 0) {
+                        label = rate.toFixed(1) + '/min ' + trend;
+                        color = '#00ff00'; // zielony — odkrywamy nowe
+                    } else if (sinceLast !== null && sinceLast < 300) {
+                        // 0 rate ale ostatnia nowa < 5 min temu
+                        const mins = Math.floor(sinceLast / 60);
+                        const secs = Math.floor(sinceLast % 60);
+                        label = '0/min ' + trend + ' (' + mins + ':' + (secs < 10 ? '0' : '') + secs + ' temu)';
+                        color = '#ffaa00'; // żółty — cisza ale świeża
+                    } else if (sinceLast !== null && sinceLast < 600) {
+                        // Cisza 5-10 min
+                        const mins = Math.floor(sinceLast / 60);
+                        label = '0/min \u25bc (cisza ' + mins + ' min)';
+                        color = '#ff3333'; // czerwony — sucho
+                    } else {
+                        // Cisza > 10 min lub Infinity (same znane sieci, brak nowych)
+                        label = '0/min \u2014 (same znane)';
+                        color = '#ff3333';
+                    }
+                    
+                    statDisc.innerText = label;
+                    statDisc.style.color = color;
+                }
                 
                 const action = data.action || 'Skanowanie eteru...';
                 pwnStatus.innerText = action;
@@ -497,20 +607,25 @@ class WebServer:
                             <th onclick="setSort('vendor')" style="cursor: pointer;" title="Sortuj">PRODUCENT${getSortIcon('vendor')}</th>
                             <th>CH</th>
                             <th>ENC</th>
+                            <th>WPS</th>
                             <th>CLI</th>
                             <th>ATK</th>
                             <th>STATUS</th>
+                            <th style="width: 60px; text-align: center;">AKCJE</th>
                         </tr>
                     `;
                 } else {
                     thead.innerHTML = `
                         <tr>
-                            <th style="width: 50px; color: #00ff00;">ID</th>
+                            <th onclick="setSort('id')" style="width: 50px; color: #00ff00; cursor: pointer;" title="Sortuj">ID${getSortIcon('id')}</th>
                             <th>BSSID</th>
                             <th onclick="setSort('essid')" style="cursor: pointer;" title="Sortuj">ESSID${getSortIcon('essid')}</th>
                             <th onclick="setSort('vendor')" style="cursor: pointer;" title="Sortuj">PRODUCENT${getSortIcon('vendor')}</th>
+                            <th>ENC</th>
+                            <th>GPS</th>
                             <th>STATUS</th>
-                            <th>DODANO</th>
+                            <th onclick="setSort('first_seen')" style="cursor: pointer;" title="Sortuj">DODANO${getSortIcon('first_seen')}</th>
+                            <th style="width: 60px; text-align: center;">AKCJE</th>
                         </tr>
                     `;
                 }
@@ -518,7 +633,7 @@ class WebServer:
                 networksTbody.innerHTML = '';
 
                 if (aps.length === 0) {
-                    const colSpan = currentView === 'active' ? 11 : 6;
+                    const colSpan = currentView === 'active' ? 13 : 9;
                     networksTbody.innerHTML = `<tr><td colspan="${colSpan}">-- Brak wyników wyszukiwania --</td></tr>`;
                     return;
                 }
@@ -536,48 +651,64 @@ class WebServer:
                     else if (ap.rssi >= -90) rssiColor = "#ffaa00";
                     else rssiColor = "#ff5555";
 
-                    // Color code brain scores
-                    let scoreColor = "var(--terminal-green-dim)";
-                    if (isCaptured) {
-                        scoreColor = "#888";
-                    } else if (ap.score >= -100) {
-                        scoreColor = "#ffffff";
-                    } else if (ap.score >= -150) {
-                        scoreColor = "var(--terminal-green)";
-                    }
 
-                    // Display 'CRACKED' instead of numeric score for captured handshakes for neatness
-                    const scoreText = isCaptured ? "CRACKED" : ap.score;
+                    // Color code brain scores (banned=grey, captured=dim, normal=white/green)
+                    const scoreColor = (ap.status === 'zbanowany') ? '#555555' : (isCaptured ? '#888' : (ap.score >= -100 ? '#ffffff' : 'var(--terminal-green-dim)'));
+
+                    // Display special labels instead of numeric score
+                    const scoreText = isCaptured ? "CRACKED" : (ap.status === 'zbanowany' ? '-' : ap.score);
+
+
+                    const isBanned = ap.status === 'zbanowany';
+                    const banText = isBanned ? '+' : 'x';
+                    const banColor = isBanned ? '#00ff00' : '#ff5555';
+                    const banTitle = isBanned ? 'Odbanuj sieć (przywróć do skanowania)' : 'Zbanuj sieć (ignoruj)';
+                    const banButtonHtml = `<span onclick="toggleBan('${ap.bssid}', ${isBanned})" style="cursor: pointer; color: ${banColor}; font-weight: bold; font-family: monospace; font-size: 1.1rem; padding: 2px 8px; display: inline-block;" title="${banTitle}">${banText}</span>`;
+                    const finalStatusText = isBanned ? 'BANNED' : statusText;
+                    const finalStatusClass = isBanned ? '' : statusClass;
 
                     if (currentView === 'active') {
+                        const isWpsActive = ap.wps && ap.wps.startsWith('TAK');
+                        const wpsColor = isWpsActive ? '#ffaa00' : 'inherit';
+                        const wpsWeight = isWpsActive ? 'bold' : 'normal';
+                        const wpsCell = isWpsActive
+                            ? `<a href="#" onclick="launchOneshot('${ap.bssid}', '${(ap.essid || '').replace(/'/g, '\\&#39;')}'); return false;" style="color: #ffaa00; font-weight: bold; text-decoration: none;" title="Uruchom atak WPS Pixie Dust (oneshot.py)">WPS &#9889;</a>`
+                            : `<span style="color: inherit;">NIE</span>`;
+
                         tr.innerHTML = `
                             <td style="color: #888;">${idx + 1}</td>
                             <td style="font-weight: bold; color: ${rssiColor};">${ap.rssi} dBm</td>
-                            <td style="font-weight: bold; color: ${scoreColor};">[${scoreText}]</td>
+                            <td style="font-weight: bold; color: ${scoreColor}; cursor: pointer; text-decoration: underline;" onclick="resetScore('${ap.bssid}')" title="Kliknij, by zresetować liczniki ataków">[${scoreText}]</td>
                             <td>${ap.bssid}</td>
                             <td class="${statusClass}">${ap.essid || '<ukryty>'}</td>
                             <td style="color: var(--terminal-green-dim); font-size: 0.85rem;">${ap.vendor || 'UNKNOWN'}</td>
                             <td>${ap.channel || '?'}</td>
                             <td>${ap.encryption || 'WPA2'}</td>
+                            <td>${wpsCell}</td>
                             <td style="font-weight: ${ap.client_count > 0 ? 'bold' : 'normal'}; color: ${ap.client_count > 0 ? '#ffffff' : 'inherit'};">${ap.client_count}</td>
-                            <td>${ap.liczba_atakow_deauth || 0}/${ap.liczba_atakow_pmkid || 0}</td>
-                            <td class="${statusClass}">${statusText}</td>
+                            <td>${ap.liczba_atakow_deauth || 0}/${ap.liczba_atakow_pmkid || 0}/<span style="color: ${(ap.liczba_atakow_pixiedust || 0) > 0 ? '#ffaa00' : 'inherit'}; font-weight: ${(ap.liczba_atakow_pixiedust || 0) > 0 ? 'bold' : 'normal'}">${ap.liczba_atakow_pixiedust || 0}</span></td>
+                            <td class="${finalStatusClass}">${finalStatusText}</td>
+                            <td style="text-align: center;">${banButtonHtml}</td>
                         `;
                     } else {
+                        const gpsHtml = (ap.gps_lat && ap.gps_lon) ? `<a href="https://maps.google.com/?q=${ap.gps_lat},${ap.gps_lon}" target="_blank" style="color: #00ff00; text-decoration: none;" title="${ap.gps_lat}, ${ap.gps_lon}">[ MAPA ]</a>` : '-';
                         tr.innerHTML = `
                             <td style="color: #00ff00; font-weight: bold; cursor: pointer; text-decoration: underline;" onclick="showApDetails('${ap.bssid}')" title="Pokaż szczegóły">${ap.id || '-'}</td>
                             <td>${ap.bssid}</td>
                             <td class="${statusClass}">${ap.essid || '<ukryty>'}</td>
                             <td>${ap.vendor || 'UNKNOWN'}</td>
-                            <td class="${statusClass}">${statusText}</td>
+                            <td>${ap.encryption || '-'}</td>
+                            <td style="white-space: nowrap;">${gpsHtml}</td>
+                            <td class="${finalStatusClass}">${finalStatusText}</td>
                             <td>${ap.first_seen || '-'}</td>
+                            <td style="text-align: center;">${banButtonHtml}</td>
                         `;
                     }
                     networksTbody.appendChild(tr);
                 });
             } catch (err) {
                 console.error(err);
-                const colSpan = currentView === 'active' ? 11 : 6;
+                const colSpan = currentView === 'active' ? 11 : 8;
                 networksTbody.innerHTML = `<tr><td colspan="${colSpan}" style="color: red;">BŁĄD ZAPISU BAZY / I/O</td></tr>`;
             }
         }
@@ -676,6 +807,15 @@ class WebServer:
             
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # Tempo odkryć nowych sieci (discovery rate)
+        try:
+            disc_rate, disc_trend, since_last = self.db.get_discovery_rate()
+            # float('inf') nie jest poprawnym JSON-em — konwertujemy na dużą liczbę
+            if since_last is not None and since_last == float('inf'):
+                since_last = 99999
+        except Exception:
+            disc_rate, disc_trend, since_last = 0.0, '\u2014', None
+
         data = {
             "total": total,
             "captured": captured,
@@ -683,7 +823,10 @@ class WebServer:
             "face": face,
             "cpu": cpu,
             "ram": ram,
-            "datetime": now_str
+            "datetime": now_str,
+            "discovery_rate": disc_rate,
+            "discovery_trend": disc_trend,
+            "seconds_since_last": since_last
         }
         return web.json_response(data)
 
@@ -727,9 +870,36 @@ class WebServer:
                 
             return web.json_response(filtered_aps)
             
+        if view == 'banned':
+            async with aiosqlite.connect(self.db_path) as conn:
+                conn.row_factory = aiosqlite.Row
+                sql = "SELECT id, bssid, essid, vendor, status, first_seen, encryption, gps_lat, gps_lon FROM handshakes WHERE status = 'zbanowany'"
+                args = []
+                if search:
+                    sql += " AND (bssid LIKE ? OR essid LIKE ? OR vendor LIKE ?)"
+                    like_str = f"%{search}%"
+                    args.extend([like_str, like_str, like_str])
+                
+                order_clause = "id DESC"
+                if sort_col == 'essid':
+                    order_clause = f"essid {'DESC' if sort_dir == 'desc' else 'ASC'}"
+                elif sort_col == 'vendor':
+                    order_clause = f"vendor {'DESC' if sort_dir == 'desc' else 'ASC'}"
+                elif sort_col == 'first_seen':
+                    order_clause = f"first_seen {'DESC' if sort_dir == 'desc' else 'ASC'}"
+                elif sort_col == 'id':
+                    order_clause = f"id {'DESC' if sort_dir == 'desc' else 'ASC'}"
+                
+                sql += f" ORDER BY {order_clause}"
+                
+                async with conn.execute(sql, args) as cursor:
+                    rows = await cursor.fetchall()
+                    aps = [dict(row) for row in rows]
+                    return web.json_response(aps)
+            
         async with aiosqlite.connect(self.db_path) as conn:
             conn.row_factory = aiosqlite.Row
-            sql = "SELECT id, bssid, essid, vendor, status, first_seen FROM handshakes"
+            sql = "SELECT id, bssid, essid, vendor, status, first_seen, encryption, gps_lat, gps_lon FROM handshakes"
             args = []
             
             conditions = []
@@ -759,6 +929,10 @@ class WebServer:
                 order_clause = f"essid {'DESC' if sort_dir == 'desc' else 'ASC'}"
             elif sort_col == 'vendor':
                 order_clause = f"vendor {'DESC' if sort_dir == 'desc' else 'ASC'}"
+            elif sort_col == 'first_seen':
+                order_clause = f"first_seen {'DESC' if sort_dir == 'desc' else 'ASC'}"
+            elif sort_col == 'id':
+                order_clause = f"id {'DESC' if sort_dir == 'desc' else 'ASC'}"
                 
             sql += f" ORDER BY {order_clause} LIMIT {limit} OFFSET {offset}"
             
@@ -799,15 +973,63 @@ class WebServer:
                 else:
                     return web.json_response({"error": "Network not found"})
 
+    async def reset_attacks(self, request):
+        bssid = request.query.get('bssid', '').strip()
+        if not bssid:
+            return web.json_response({"error": "No bssid provided"}, status=400)
+        
+        await self.db.reset_attacks(bssid)
+        return web.json_response({"status": "ok"})
+
+    async def delete_network(self, request):
+        bssid = request.query.get('bssid', '').strip()
+        if not bssid:
+            return web.json_response({"error": "No bssid provided"}, status=400)
+        
+        await self.db.delete_ap(bssid)
+        return web.json_response({"status": "ok", "message": "Network deleted"})
+
+    async def ban_network(self, request):
+        bssid = request.query.get('bssid', '').strip()
+        if not bssid:
+            return web.json_response({"error": "No bssid provided"}, status=400)
+        
+        existing = await self.db.get_ap(bssid)
+        if not existing:
+            active_aps = await self.db.get_active_aps()
+            active_ap = next((ap for ap in active_aps if ap['bssid'] == bssid), None)
+            if active_ap:
+                await self.db.update_ap(
+                    bssid=bssid,
+                    essid=active_ap.get('essid'),
+                    vendor=active_ap.get('vendor'),
+                    encryption=active_ap.get('encryption')
+                )
+            else:
+                await self.db.update_ap(bssid=bssid)
+        
+        await self.db.update_status(bssid, 'zbanowany')
+        await self.db.flush()
+        return web.json_response({"status": "ok", "message": "Network banned"})
+
+    async def unban_network(self, request):
+        bssid = request.query.get('bssid', '').strip()
+        if not bssid:
+            return web.json_response({"error": "No bssid provided"}, status=400)
+        
+        await self.db.update_status(bssid, 'nowy')
+        await self.db.flush()
+        return web.json_response({"status": "ok", "message": "Network unbanned"})
+
     def _generate_plot_base64(self, fig):
         buf = io.BytesIO()
-        fig.savefig(buf, format='png', bbox_inches='tight', facecolor='white', edgecolor='none')
+        fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, edgecolor='none')
         buf.seek(0)
         img_str = base64.b64encode(buf.read()).decode('utf-8')
         return f"data:image/png;base64,{img_str}"
 
     def _apply_light_theme(self, ax):
-        ax.set_facecolor('white')
+        ax.set_facecolor('none')
         ax.tick_params(colors='black')
         for spine in ax.spines.values():
             spine.set_color('black')
@@ -831,12 +1053,25 @@ class WebServer:
                 date_data_raw = [dict(row) for row in await cursor.fetchall()]
                 date_data = list(reversed(date_data_raw))
                 if date_data:
-                    fig = Figure(figsize=(6, 4))
+                    fig = Figure(figsize=(6, 4), facecolor='none')
                     ax = fig.subplots()
                     self._apply_light_theme(ax)
                     dates = [d['date'][5:] for d in date_data] # MM-DD
                     counts = [d['count'] for d in date_data]
-                    ax.scatter(dates, counts, color='#ef4444', edgecolors='black', s=40, zorder=3)
+                    ax.plot(dates, counts, color='#2563eb', linestyle='-', linewidth=1.5, zorder=2)
+                    ax.scatter(dates, counts, color='#2563eb', edgecolors='black', s=10, zorder=3)
+                    ax.set_yscale('log')
+                    
+                    if counts:
+                        max_val = max(counts)
+                        ax.axhline(max_val, color='#2563eb', linestyle='--', linewidth=1, alpha=0.6, zorder=1)
+                        # Umieszczenie tekstu nad linią po prawej stronie wykresu
+                        ax.text(len(dates) - 1, max_val, f' Max: {max_val} ', color='#2563eb', va='bottom', ha='right', fontsize=8, fontweight='bold')
+
+                    from matplotlib.ticker import ScalarFormatter
+                    y_formatter = ScalarFormatter()
+                    y_formatter.set_scientific(False)
+                    ax.yaxis.set_major_formatter(y_formatter)
                     ax.set_title('Nowe sieci (ost. 14 dni)')
                     ax.tick_params(axis='x', rotation=45)
                     for label in ax.get_xticklabels():
@@ -848,3 +1083,35 @@ class WebServer:
             'chart_dates': chart_dates,
             'vendors': vendor_data
         })
+
+    async def run_oneshot(self, request):
+        """Uruchamia oneshot.py (atak WPS Pixie Dust) w tle dla podanego BSSID."""
+        import asyncio
+        bssid = request.query.get('bssid', '').strip()
+        if not bssid:
+            return web.json_response({'error': 'Brak parametru bssid'}, status=400)
+
+        # Interfejs: użyj wlan1 (strzelec) jeśli dostępny, wpp wlan0
+        iface = 'wlan1'
+
+        # Ścieżka do oneshot.py — relatywna do katalogu roboczego skanerb
+        script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'oneshot.py')
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                'python3', script_path,
+                '-i', iface,
+                '-b', bssid,
+                '-K',
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL
+            )
+            # Inkrementuj licznik ataków Pixie Dust w bazie
+            await self.db.mark_attack(bssid, 'pixiedust')
+            await self.db.flush()
+
+            if self.shared_state is not None:
+                self.shared_state['action'] = f'[WPS PIXIE DUST] Cel: {bssid}'
+            return web.json_response({'status': 'started', 'pid': proc.pid, 'bssid': bssid})
+        except Exception as e:
+            return web.json_response({'error': str(e)}, status=500)

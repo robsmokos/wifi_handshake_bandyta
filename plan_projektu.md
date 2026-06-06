@@ -106,3 +106,9 @@ Asynchroniczna logika scoringu i decyzyjności.
 Używa `asyncio.create_subprocess_exec` do odpalania i czytania wyjścia `hcxpcapngtool` w tle, nie paraliżując w tym czasie głównej pętli odświeżającej. Zapewnia błyskawiczną walidację EAPOL (M1/M2) oraz PMKID.
 #### `main.py`
 Główna pętla `async def main()` sterująca współbieżnie zadaniami (odświeżanie statystyk, skanowanie, ataki).
+
+
+### do projektu dodaj atak typu Pixie Dust attack, jesli niemasz kodu zkopiuj z wifite, ataki beda przeprowadzanie tylko i wyłącznie na mją sieć testoą
+
+
+https://github.com/robsmokos/wifi_handshake_bandyta.git
