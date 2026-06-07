@@ -478,6 +478,7 @@ class Database:
                 else:
                     # Dynamic Brain Score Calculation matching brain.py
                     failures = ap['liczba_atakow_deauth'] + ap['liczba_atakow_pmkid']
+                    capped_failures = min(failures, 10)
                     bonus_nowej_sieci = 20 if failures == 0 else 0
                     
                     last_attack = status_info.get('last_attacked_at', 0.0) or 0.0
@@ -486,7 +487,10 @@ class Database:
                     if last_attack > 0.0 and time_since_attack < 180.0:
                         cooldown_penalty = (180.0 - time_since_attack)
                     
-                    score = (ap['client_count'] * 5) + ap['rssi'] + bonus_nowej_sieci - (failures * 10) - cooldown_penalty
+                    is_hidden = str(ap.get('essid') or '') in (None, "", "<ukryty>", "<ukryte>", "ukryta")
+                    bonus_hidden = 150 if (is_hidden and ap['client_count'] > 0) else 0
+                    
+                    score = (ap['client_count'] * 5) + ap['rssi'] + bonus_nowej_sieci + bonus_hidden - (capped_failures * 10) - cooldown_penalty
                     ap['score'] = round(score, 1)
                 
                 bssid_file_name = ap['bssid'].replace(":", "-")
