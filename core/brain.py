@@ -126,7 +126,7 @@ class Brain:
         attack_type = None
         target_client = None
         
-        if client_count > 0 and score <= 1000 and db_info.get('liczba_atakow_deauth', 0) < 10:
+        if client_count > 0 and score <= 1000 and db_info.get('liczba_atakow_deauth', 0) < 100:
             attack_type = "deauth"
             target_client = None
             if isinstance(clients, dict) and clients:
