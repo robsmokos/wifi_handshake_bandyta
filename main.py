@@ -39,7 +39,14 @@ async def status_bar(db, event_queue, attack_queue, state):
                 atk_str = f"{ap.get('liczba_atakow_deauth', 0)}/{ap.get('liczba_atakow_pmkid', 0)}"
                 essid = str(ap.get('essid') or '<ukryte>')[:20]
                 status = ap.get('status', 'nowy')
-                color = "\033[92m" if 'przechwycono' in status else ""
+                if 'przechwycono' in status:
+                    color = "\033[92m" # Green
+                elif status == 'time_banned':
+                    color = "\033[91m" # Red
+                elif status == 'zbanowany':
+                    color = "\033[90m" # Grey
+                else:
+                    color = ""
                 reset = "\033[0m" if color else ""
                 lines.append(f"\033[K{color}{ap['bssid']:17} | {essid:20} | {atk_str:3} | {status[:15]}{reset}")
             
@@ -64,10 +71,18 @@ async def status_bar(db, event_queue, attack_queue, state):
                 f.write(f"UI Error: {e}\n")
             await asyncio.sleep(1)
 
+@web.middleware
+async def no_cache_middleware(request, handler):
+    response = await handler(request)
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
 async def start_web_server(db, shared_state):
     """Asynchronicznie uruchamia serwer WWW na porcie 8080."""
     ws = WebServer(db, shared_state)
-    app = web.Application()
+    app = web.Application(middlewares=[no_cache_middleware])
     app.router.add_get('/', ws.get_index)
     app.router.add_get('/api/stats', ws.get_stats)
     app.router.add_get('/api/aps', ws.get_aps)
@@ -78,6 +93,7 @@ async def start_web_server(db, shared_state):
     app.router.add_post('/api/ban', ws.ban_network)
     app.router.add_post('/api/unban', ws.unban_network)
     app.router.add_post('/api/oneshot', ws.run_oneshot)
+    app.router.add_post('/api/toggle_eink', ws.toggle_eink)
     # Threat Intel — CVE Lookup (NVD API)
     app.router.add_get('/api/cve', ws.get_cve)
     app.router.add_get('/api/cve/top_vendors', ws.get_cve_top_vendors)

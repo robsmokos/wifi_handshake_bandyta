@@ -112,3 +112,6 @@ Główna pętla `async def main()` sterująca współbieżnie zadaniami (odświe
 
 
 https://github.com/robsmokos/wifi_handshake_bandyta.git
+
+Ragnar Auditing Tool
+RASPYJACK

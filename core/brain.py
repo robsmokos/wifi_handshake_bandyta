@@ -90,7 +90,7 @@ class Brain:
         if not db_info: return
         
         status = db_info.get('status')
-        if status in ['przechwycono', 'pmkid_przechwycono', 'zbanowany']: return
+        if status in ['przechwycono', 'pmkid_przechwycono', 'zbanowany', 'time_banned']: return
         if self.is_wpa3_only(ap): return
         
         # Deduplikacja

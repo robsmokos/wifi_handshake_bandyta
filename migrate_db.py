@@ -151,4 +151,25 @@ if 'liczba_atakow_pixiedust' not in columns:
 else:
     print("Database already has 'liczba_atakow_pixiedust' column.")
 
+# --- Krok 6: Dodaj kolumnę 'czas_zbanowania' jeśli brakuje ---
+columns = get_columns()
+if 'czas_zbanowania' not in columns:
+    print("Migrating database: adding 'czas_zbanowania' column...")
+    try:
+        c.execute("ALTER TABLE handshakes ADD COLUMN czas_zbanowania TEXT")
+        conn.commit()
+        print("Migration 'czas_zbanowania': OK")
+    except Exception as e:
+        print("Migration 'czas_zbanowania' failed:", e)
+else:
+    print("Database already has 'czas_zbanowania' column.")
+
+# --- Krok 7: Uzupełnij 'czas_zbanowania' dla już zbanowanych sieci ---
+try:
+    c.execute("UPDATE handshakes SET czas_zbanowania = COALESCE(last_modified, last_seen) WHERE status IN ('zbanowany', 'time_banned') AND czas_zbanowania IS NULL")
+    conn.commit()
+    print("Poprawiono brakujące czasy zbanowania dla zbanowanych sieci.")
+except Exception as e:
+    print("Nie udało się uzupełnić czasów zbanowania:", e)
+
 conn.close()

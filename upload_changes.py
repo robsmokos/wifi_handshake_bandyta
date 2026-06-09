@@ -11,7 +11,14 @@ files_to_upload = [
     ('main.py', f'{remote_base}/main.py'),
     ('core/database.py', f'{remote_base}/core/database.py'),
     ('core/display.py', f'{remote_base}/core/display.py'),
+    ('core/brain.py', f'{remote_base}/core/brain.py'),
+    ('core/executor.py', f'{remote_base}/core/executor.py'),
+    ('core/validator.py', f'{remote_base}/core/validator.py'),
     ('migrate_db.py', f'{remote_base}/migrate_db.py'),
+    ('scratch/check_db.py', f'{remote_base}/check_db.py'),
+    ('scratch/test_active.py', f'{remote_base}/test_active.py'),
+    ('scratch/check_api.py', f'{remote_base}/check_api.py'),
+    ('scratch/check_ban_time.py', f'{remote_base}/check_ban_time.py'),
 ]
 
 ssh = paramiko.SSHClient()

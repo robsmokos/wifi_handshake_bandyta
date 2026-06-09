@@ -36,15 +36,17 @@ async def update_epaper_screen(db, total, captured, shared_state, picdir):
             active_aps_filtered = [
                 ap for ap in active_aps 
                 if 'przechwycono' not in ap.get('status', '').lower() 
-                and ap.get('status', '').lower() not in ('zbanowany', 'banned')
+                and ap.get('status', '').lower() not in ('zbanowany', 'banned', 'time_banned')
             ]
+            # Sort first by client count (descending), then by RSSI (descending)
+            active_aps_filtered.sort(key=lambda x: (x.get('client_count', 0), x.get('rssi', -120)), reverse=True)
             active_count = len(active_aps)
         except Exception as db_err:
             logger.error(f"Failed to fetch active APs: {db_err}")
             active_aps_filtered = []
             active_count = 0
             
-        top_5 = active_aps_filtered[:5]
+        top_6 = active_aps_filtered[:6]
 
         # Top Status: Tempo & Captured counts
         try:
@@ -59,17 +61,30 @@ async def update_epaper_screen(db, total, captured, shared_state, picdir):
             rate, trend, sub_str = 0.0, "—", "brak"
 
         # Draw Stats
-        draw.text((10, 3), f"TEMPO: {rate}/min {trend} ({sub_str})", font=font_title, fill=epd.BLACK)
-        draw.text((10, 22), f"NET: {total} | ACTI: {active_count} | OK: {captured}", font=font_title, fill=epd.RED)
+        deauth_count = shared_state.get('global_deauth_count', 0)
+        pmkid_count = shared_state.get('global_pmkid_count', 0)
+        # Draw yellow bar background for TEMPO (widened by 2px: height becomes 22 -> y from 0 to 22)
+        draw.rectangle([(0, 0), (epd.height, 22)], fill=epd.YELLOW)
+        tempo_text = f"TEMPO: {rate}/min {trend} ({sub_str})"
+        draw.text((10, 2), tempo_text, font=font_title, fill=epd.BLACK)
+        draw.text((11, 2), tempo_text, font=font_title, fill=epd.BLACK)
+        # Draw red bar background (shifted down to start at 23, ending at 45)
+        draw.rectangle([(0, 23), (epd.height, 45)], fill=epd.RED)
+        # Draw white text over the red bar (bold effect via 1px offset, centered at 25)
+        char_241 = bytes([241]).decode('cp437')
+        char_197 = bytes([197]).decode('cp437')
+        status_text = f"{char_241}:{total} | up:{active_count} | ok:{captured} | {char_197}:{deauth_count} | p:{pmkid_count}"
+        draw.text((10, 25), status_text, font=font_title, fill=epd.WHITE)
+        draw.text((11, 25), status_text, font=font_title, fill=epd.WHITE)
         
-        # Separator line
-        draw.line([(0, 43), (epd.height, 43)], fill=epd.YELLOW, width=2)
+        # Separator line (shifted to 46)
+        draw.line([(0, 46), (epd.height, 46)], fill=epd.YELLOW, width=2)
         
-        if not top_5:
+        if not top_6:
             draw.text((20, 80), "Skanowanie w toku / brak sieci...", font=font_text, fill=epd.BLACK)
         else:
-            y_pos = 44
-            for ap in top_5:
+            y_pos = 48
+            for ap in top_6:
                 rssi = ap.get('rssi', 0)
                 essid = ap.get('essid') or '<ukryta>'
                 deauth = ap.get('liczba_atakow_deauth', 0)
@@ -77,8 +92,8 @@ async def update_epaper_screen(db, total, captured, shared_state, picdir):
                 clients = ap.get('client_count', 0)
                 score = ap.get('score', 0.0)
                 
-                # RSSI
-                rssi_str = f"{rssi}"
+                # RSSI (negative sign removed)
+                rssi_str = f"{abs(rssi)}"
                 
                 # Truncate ESSID to fit nicely
                 essid_disp = essid[:9]
@@ -104,10 +119,9 @@ async def update_epaper_screen(db, total, captured, shared_state, picdir):
                 # Draw BRAIN score as a black digit/value (22 px) at the end
                 draw.text((245, y_pos), score_disp, font=font_text, fill=epd.BLACK)
                 
-                y_pos += 21
+                y_pos += 18
             
-        # Outer border
-        draw.rectangle([(0, 0), (epd.height - 1, epd.width - 1)], outline=epd.BLACK, width=2)
+        # Outer border removed (to gain pixels and stretch display area)
         
         epd.display(epd.getbuffer(Himage))
         epd.sleep()
@@ -140,7 +154,8 @@ async def epaper_display_updater(db, shared_state):
         
     # Initial startup draw
     try:
-        await update_epaper_screen(db, last_total_count, last_captured_count, shared_state, picdir)
+        if not shared_state.get('pause_eink', False):
+            await update_epaper_screen(db, last_total_count, last_captured_count, shared_state, picdir)
     except Exception as e:
         logger.error(f"E-Paper initial startup draw failed: {e}")
 
@@ -148,6 +163,8 @@ async def epaper_display_updater(db, shared_state):
         await asyncio.sleep(60) # Update every 1 minute
         
         try:
+            if shared_state.get('pause_eink', False):
+                continue
             total_count, captured_count = await db.get_stats()
             logger.info(f"Updating E-Paper display (periodic 1 minute update). Total: {total_count}, Captured: {captured_count}")
             await update_epaper_screen(db, total_count, captured_count, shared_state, picdir)

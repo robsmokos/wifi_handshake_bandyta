@@ -147,6 +147,10 @@ class WebServer:
             color: #ffffff;
             font-weight: bold;
         }
+        .banned-red {
+            color: #ff3333 !important;
+            font-weight: bold;
+        }
         .modal {
             display: none; position: fixed; z-index: 1000; left: 0; top: 0;
             width: 100%; height: 100%; overflow: auto; background-color: rgba(0,0,0,0.8);
@@ -231,6 +235,7 @@ class WebServer:
         <button id="btn-view-banned" onclick="switchView('banned')">[ ZBANOWANE ]</button>
         <button id="btn-view-stats" onclick="switchView('stats')">[ STATYSTYKI ]</button>
         <button id="btn-view-cve" onclick="switchView('cve')">[ THREAT INTEL ]</button>
+        <button id="btn-toggle-eink" onclick="toggleEink()">[ ZATRZYMAJ E-INK ]</button>
         
         <input type="text" id="search-bar" placeholder="Szukaj (BSSID, ESSID)..." style="flex-grow: 1;">
         
@@ -510,6 +515,32 @@ class WebServer:
             }
         }
 
+        async function toggleEink() {
+            try {
+                const res = await fetch('/api/toggle_eink', { method: 'POST' });
+                const data = await res.json();
+                updateEinkButtonState(data.paused);
+            } catch (err) {
+                console.error(err);
+                alert('Błąd podczas przełączania stanu E-Ink');
+            }
+        }
+
+        function updateEinkButtonState(paused) {
+            const btn = document.getElementById('btn-toggle-eink');
+            if (btn) {
+                if (paused) {
+                    btn.innerText = '[ WZNÓW E-INK ]';
+                    btn.style.borderColor = '#ffaa00';
+                    btn.style.color = '#ffaa00';
+                } else {
+                    btn.innerText = '[ ZATRZYMAJ E-INK ]';
+                    btn.style.borderColor = '#00ff00';
+                    btn.style.color = '#00ff00';
+                }
+            }
+        }
+
         // Mappings from ASCII states to Text Status Labels
         const faceNameMap = {
             "(o_O)": "AWAKE",
@@ -611,6 +642,10 @@ class WebServer:
                 
                 if (pwnFace) pwnFace.innerText = faceCode;
                 if (pwnFaceLbl) pwnFaceLbl.innerText = mappedName;
+
+                if (data.pause_eink !== undefined) {
+                    updateEinkButtonState(data.pause_eink);
+                }
             } catch (err) {
                 console.error(err);
                 pwnStatus.innerText = "BŁĄD POŁĄCZENIA";
@@ -670,6 +705,7 @@ class WebServer:
                         </tr>
                     `;
                 } else {
+                    const dateHeaderLabel = currentView === 'banned' ? 'ZBANOWANO' : 'DODANO';
                     thead.innerHTML = `
                         <tr>
                             <th onclick="setSort('id')" style="width: 50px; color: #00ff00; cursor: pointer;" title="Sortuj">ID${getSortIcon('id')}</th>
@@ -679,7 +715,7 @@ class WebServer:
                             <th>ENC</th>
                             <th>GPS</th>
                             <th>STATUS</th>
-                            <th onclick="setSort('first_seen')" style="cursor: pointer;" title="Sortuj">DODANO${getSortIcon('first_seen')}</th>
+                            <th onclick="setSort('first_seen')" style="cursor: pointer;" title="Sortuj">${dateHeaderLabel}${getSortIcon('first_seen')}</th>
                             <th style="width: 60px; text-align: center;">AKCJE</th>
                         </tr>
                     `;
@@ -708,54 +744,67 @@ class WebServer:
 
 
                     // Color code brain scores (banned=grey, captured=dim, normal=white/green)
-                    const scoreColor = (ap.status === 'zbanowany') ? '#555555' : (isCaptured ? '#888' : (ap.score >= -100 ? '#ffffff' : 'var(--terminal-green-dim)'));
+                    const isBanned = ap.status === 'zbanowany' || ap.status === 'time_banned';
+                    const isTimeBanned = ap.status === 'time_banned';
+                    const scoreColor = isTimeBanned ? '#ff3333' : ((ap.status === 'zbanowany') ? '#555555' : (isCaptured ? '#888' : (ap.score >= -100 ? '#ffffff' : 'var(--terminal-green-dim)')));
 
                     // Display special labels instead of numeric score
-                    const scoreText = isCaptured ? "CRACKED" : (ap.status === 'zbanowany' ? '-' : ap.score);
+                    const scoreText = isCaptured ? "CRACKED" : (isBanned ? '-' : ap.score);
 
-
-                    const isBanned = ap.status === 'zbanowany';
                     const banText = isBanned ? '+' : 'x';
                     const banColor = isBanned ? '#00ff00' : '#ff5555';
                     const banTitle = isBanned ? 'Odbanuj sieć (przywróć do skanowania)' : 'Zbanuj sieć (ignoruj)';
                     const banButtonHtml = `<span onclick="toggleBan('${ap.bssid}', ${isBanned})" style="cursor: pointer; color: ${banColor}; font-weight: bold; font-family: monospace; font-size: 1.1rem; padding: 2px 8px; display: inline-block;" title="${banTitle}">${banText}</span>`;
-                    const finalStatusText = isBanned ? 'BANNED' : statusText;
-                    const finalStatusClass = isBanned ? '' : statusClass;
+                    
+                    let finalStatusText = statusText;
+                    let finalStatusClass = statusClass;
+                    if (ap.status === 'zbanowany') {
+                        finalStatusText = 'BANNED';
+                        finalStatusClass = '';
+                    } else if (ap.status === 'time_banned') {
+                        finalStatusText = 'TIME_BANNED';
+                        finalStatusClass = 'banned-red';
+                    }
+
+                    if (isTimeBanned) {
+                        tr.classList.add('banned-red');
+                    }
 
                     if (currentView === 'active') {
                         const isWpsActive = ap.wps && ap.wps.startsWith('TAK');
                         const wpsColor = isWpsActive ? '#ffaa00' : 'inherit';
                         const wpsWeight = isWpsActive ? 'bold' : 'normal';
                         const wpsCell = isWpsActive
-                            ? `<a href="#" onclick="launchOneshot('${ap.bssid}', '${(ap.essid || '').replace(/'/g, '\\&#39;')}'); return false;" style="color: #ffaa00; font-weight: bold; text-decoration: none;" title="Uruchom atak WPS Pixie Dust (oneshot.py)">WPS &#9889;</a>`
+                            ? `<a href="#" onclick="launchOneshot('${ap.bssid}', '${(ap.essid || '').replace(/'/g, '\\&#39;')}'); return false;" style="color: ${isTimeBanned ? '#ff3333' : '#ffaa00'}; font-weight: bold; text-decoration: none;" title="Uruchom atak WPS Pixie Dust (oneshot.py)">WPS &#9889;</a>`
                             : `<span style="color: inherit;">NIE</span>`;
 
                         tr.innerHTML = `
-                            <td style="color: #888;">${idx + 1}</td>
-                            <td style="font-weight: bold; color: ${rssiColor};">${ap.rssi} dBm</td>
+                            <td style="color: ${isTimeBanned ? '#ff3333' : '#888'};">${idx + 1}</td>
+                            <td style="font-weight: bold; color: ${isTimeBanned ? '#ff3333' : rssiColor};">${ap.rssi} dBm</td>
                             <td style="font-weight: bold; color: ${scoreColor}; cursor: pointer; text-decoration: underline;" onclick="resetScore('${ap.bssid}')" title="Kliknij, by zresetować liczniki ataków">[${scoreText}]</td>
-                            <td>${ap.bssid}</td>
-                            <td class="${statusClass}">${ap.essid || '<ukryty>'}</td>
-                            <td style="color: var(--terminal-green-dim); font-size: 0.85rem;">${ap.vendor || 'UNKNOWN'}</td>
-                            <td>${ap.channel || '?'}</td>
-                            <td>${ap.encryption || 'WPA2'}</td>
+                            <td style="${isTimeBanned ? 'color: #ff3333;' : ''}">${ap.bssid}</td>
+                            <td class="${finalStatusClass}">${ap.essid || '<ukryty>'}</td>
+                            <td style="color: ${isTimeBanned ? '#ff3333' : 'var(--terminal-green-dim)'}; font-size: 0.85rem;">${ap.vendor || 'UNKNOWN'}</td>
+                            <td style="${isTimeBanned ? 'color: #ff3333;' : ''}">${ap.channel || '?'}</td>
+                            <td style="${isTimeBanned ? 'color: #ff3333;' : ''}">${ap.encryption || 'WPA2'}</td>
                             <td>${wpsCell}</td>
-                            <td style="font-weight: ${ap.client_count > 0 ? 'bold' : 'normal'}; color: ${ap.client_count > 0 ? '#ffffff' : 'inherit'};">${ap.client_count}</td>
-                            <td>${ap.liczba_atakow_deauth || 0}/${ap.liczba_atakow_pmkid || 0}/<span style="color: ${(ap.liczba_atakow_pixiedust || 0) > 0 ? '#ffaa00' : 'inherit'}; font-weight: ${(ap.liczba_atakow_pixiedust || 0) > 0 ? 'bold' : 'normal'}">${ap.liczba_atakow_pixiedust || 0}</span></td>
+                            <td style="font-weight: ${ap.client_count > 0 ? 'bold' : 'normal'}; color: ${isTimeBanned ? '#ff3333' : (ap.client_count > 0 ? '#ffffff' : 'inherit')};">${ap.client_count}</td>
+                            <td style="${isTimeBanned ? 'color: #ff3333;' : ''}">${ap.liczba_atakow_deauth || 0}/${ap.liczba_atakow_pmkid || 0}/<span style="color: ${isTimeBanned ? '#ff3333' : ((ap.liczba_atakow_pixiedust || 0) > 0 ? '#ffaa00' : 'inherit')}; font-weight: ${(ap.liczba_atakow_pixiedust || 0) > 0 ? 'bold' : 'normal'}">${ap.liczba_atakow_pixiedust || 0}</span></td>
                             <td class="${finalStatusClass}">${finalStatusText}</td>
                             <td style="text-align: center;">${banButtonHtml}</td>
                         `;
                     } else {
-                        const gpsHtml = (ap.gps_lat && ap.gps_lon) ? `<a href="https://maps.google.com/?q=${ap.gps_lat},${ap.gps_lon}" target="_blank" style="color: #00ff00; text-decoration: none;" title="${ap.gps_lat}, ${ap.gps_lon}">[ MAPA ]</a>` : '-';
+                        const gpsHtml = (ap.gps_lat && ap.gps_lon) ? `<a href="https://maps.google.com/?q=${ap.gps_lat},${ap.gps_lon}" target="_blank" style="color: ${isTimeBanned ? '#ff3333' : '#00ff00'}; text-decoration: none;" title="${ap.gps_lat}, ${ap.gps_lon}">[ MAPA ]</a>` : '-';
+                        const displayDate = currentView === 'banned' ? (ap.czas_zbanowania || '-') : (ap.first_seen || '-');
                         tr.innerHTML = `
-                            <td style="color: #00ff00; font-weight: bold; cursor: pointer; text-decoration: underline;" onclick="showApDetails('${ap.bssid}')" title="Pokaż szczegóły">${ap.id || '-'}</td>
-                            <td>${ap.bssid}</td>
-                            <td class="${statusClass}">${ap.essid || '<ukryty>'}</td>
-                            <td>${ap.vendor || 'UNKNOWN'}</td>
-                            <td>${ap.encryption || '-'}</td>
+                            <td style="color: ${isTimeBanned ? '#ff3333' : '#00ff00'}; font-weight: bold; cursor: pointer; text-decoration: underline;" onclick="showApDetails('${ap.bssid}')" title="Pokaż szczegóły">${ap.id || '-'}</td>
+                            <td style="${isTimeBanned ? 'color: #ff3333;' : ''}">${ap.bssid}</td>
+                            <td class="${finalStatusClass}">${ap.essid || '<ukryty>'}</td>
+                            <td style="${isTimeBanned ? 'color: #ff3333;' : ''}">${ap.vendor || 'UNKNOWN'}</td>
+                            <td style="${isTimeBanned ? 'color: #ff3333;' : ''}">${ap.encryption || '-'}</td>
                             <td style="white-space: nowrap;">${gpsHtml}</td>
                             <td class="${finalStatusClass}">${finalStatusText}</td>
-                            <td>${ap.first_seen || '-'}</td>
+                            <td style="${isTimeBanned ? 'color: #ff3333;' : ''}">${displayDate}</td>
                             <td style="text-align: center;">${banButtonHtml}</td>
                         `;
                     }
@@ -987,7 +1036,8 @@ class WebServer:
             "datetime": now_str,
             "discovery_rate": disc_rate,
             "discovery_trend": disc_trend,
-            "seconds_since_last": since_last
+            "seconds_since_last": since_last,
+            "pause_eink": self.shared_state.get('pause_eink', False)
         }
         return web.json_response(data)
 
@@ -1022,6 +1072,11 @@ class WebServer:
                         continue
                     if status_filter == 'new' and ap['status'] != 'nowy':
                         continue
+                
+                # Wyklucz zbanowane i time_banned z widoku aktywnych (tak jak w e-papierze)
+                if ap.get('status') in ('zbanowany', 'time_banned'):
+                    continue
+                    
                 filtered_aps.append(ap)
                 
             if sort_col == 'essid':
@@ -1034,7 +1089,7 @@ class WebServer:
         if view == 'banned':
             async with aiosqlite.connect(self.db_path) as conn:
                 conn.row_factory = aiosqlite.Row
-                sql = "SELECT id, bssid, essid, vendor, status, first_seen, encryption, gps_lat, gps_lon FROM handshakes WHERE status = 'zbanowany'"
+                sql = "SELECT id, bssid, essid, vendor, status, first_seen, encryption, gps_lat, gps_lon, czas_zbanowania FROM handshakes WHERE status IN ('zbanowany', 'time_banned')"
                 args = []
                 if search:
                     sql += " AND (bssid LIKE ? OR essid LIKE ? OR vendor LIKE ?)"
@@ -1195,6 +1250,13 @@ class WebServer:
         await self.db.update_status(bssid, 'nowy')
         await self.db.flush()
         return web.json_response({"status": "ok", "message": "Network unbanned"})
+
+    async def toggle_eink(self, request):
+        """Przełącza stan wstrzymania aktualizacji e-inka."""
+        paused = self.shared_state.get('pause_eink', False)
+        new_state = not paused
+        self.shared_state['pause_eink'] = new_state
+        return web.json_response({"status": "ok", "paused": new_state})
 
     def _generate_plot_base64(self, fig):
         buf = io.BytesIO()

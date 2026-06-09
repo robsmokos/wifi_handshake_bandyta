@@ -23,14 +23,12 @@ class Executor:
                 payload = await asyncio.wait_for(self.attack_queue.get(), timeout=5)
                 
                 bssid = payload['bssid']
-                
-                # Zwalniamy BSSID z pamięci podręcznej Braina
-                if bssid in self.brain.in_attack_queue:
-                    self.brain.in_attack_queue.remove(bssid)
-                    
                 try:
                     # TTL Check
                     if time.time() - payload['timestamp'] > self.ttl:
+                        # Jeśli odrzucamy z powodu TTL, zwalniamy BSSID z pamięci Braina
+                        if bssid in self.brain.in_attack_queue:
+                            self.brain.in_attack_queue.remove(bssid)
                         continue  # Pomijamy, ale nie zamykamy wątku!
                     await self.execute_attack(payload)
                 except Exception as e:
@@ -64,10 +62,12 @@ class Executor:
 
         # 2. EGZEKUCJA Z PAUZAMI
         if attack_type == 'deauth' and client_mac:
+            self.shared_state['global_deauth_count'] = self.shared_state.get('global_deauth_count', 0) + 1
             for _ in range(3):
                 await self.api.send_deauth(bssid, client_mac)
                 await asyncio.sleep(0.5)
         elif attack_type == 'pmkid':
+            self.shared_state['global_pmkid_count'] = self.shared_state.get('global_pmkid_count', 0) + 1
             for _ in range(3):
                 await self.api.send_assoc(bssid)
                 await asyncio.sleep(0.5)
@@ -75,6 +75,9 @@ class Executor:
             # Brak klienta przy deauth - anuluj atak
             logging.warning(f"Executor: Deauth bez klienta dla {bssid}, pomijam.")
             self.shared_state['action'] = "Skanowanie eteru..."
+            # Zwalniamy BSSID z pamięci podręcznej Braina przy wcześniejszym wyjściu
+            if bssid in self.brain.in_attack_queue:
+                self.brain.in_attack_queue.remove(bssid)
             return
 
         # Aktualizacja statusu
@@ -91,5 +94,9 @@ class Executor:
         if f"ATAK" in self.shared_state.get('action', ''):
             self.shared_state['action'] = "Skanowanie eteru..."
             
+        # Zwalniamy BSSID z pamięci podręcznej Braina po zwolnieniu kanału
+        if bssid in self.brain.in_attack_queue:
+            self.brain.in_attack_queue.remove(bssid)
+
         # 5. ASYNCHRONICZNA WALIDACJA (Race Condition safe)
         asyncio.create_task(self.validator.check_pcap(bssid, attack_type))

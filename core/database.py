@@ -32,6 +32,7 @@ class Database:
                     gps_lat REAL,
                     gps_lon REAL,
                     czas_przechwycenia TEXT,
+                    czas_zbanowania TEXT,
                     last_attacked_at REAL DEFAULT 0,
                     liczba_atakow_deauth INTEGER DEFAULT 0,
                     liczba_atakow_pmkid INTEGER DEFAULT 0,
@@ -99,6 +100,7 @@ class Database:
                         'first_seen': now_str, 'last_seen': now_str,
                         'gps_lat': gps_lat, 'gps_lon': gps_lon,
                         'czas_przechwycenia': None,
+                        'czas_zbanowania': None,
                         'last_attacked_at': 0.0,
                         'liczba_atakow_deauth': 0, 'liczba_atakow_pmkid': 0,
                         'liczba_atakow_pixiedust': 0,
@@ -172,6 +174,14 @@ class Database:
                     ap['liczba_atakow_pmkid'] += 1
                 elif attack_type == "pixiedust":
                     ap['liczba_atakow_pixiedust'] = ap.get('liczba_atakow_pixiedust', 0) + 1
+                
+                # Sprawdzenie parametru ATK 100/3/x (maksymalnie dopuszczone)
+                if 'przechwycono' not in str(ap.get('status', '')):
+                    deauth_count = ap.get('liczba_atakow_deauth', 0)
+                    pmkid_count = ap.get('liczba_atakow_pmkid', 0)
+                    if deauth_count >= 100 and pmkid_count >= 3:
+                        ap['status'] = 'time_banned'
+                        ap['czas_zbanowania'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
         await self.check_flush()
 
@@ -213,6 +223,10 @@ class Database:
                 ap['last_modified'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 if status in ['przechwycono', 'pmkid_przechwycono']:
                     ap['czas_przechwycenia'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                elif status in ['zbanowany', 'time_banned']:
+                    ap['czas_zbanowania'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                elif status == 'nowy':
+                    ap['czas_zbanowania'] = None
                     
         await self.check_flush()
 
@@ -253,9 +267,9 @@ class Database:
                     await conn.execute('''
                         INSERT INTO handshakes (
                             bssid, essid, vendor, first_seen, last_seen, 
-                            gps_lat, gps_lon, czas_przechwycenia,
+                            gps_lat, gps_lon, czas_przechwycenia, czas_zbanowania,
                             last_attacked_at, liczba_atakow_deauth, liczba_atakow_pmkid, liczba_atakow_pixiedust, status, encryption, last_modified
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(bssid) DO UPDATE SET
                             essid=excluded.essid,
                             vendor=excluded.vendor,
@@ -263,6 +277,7 @@ class Database:
                             gps_lat=excluded.gps_lat,
                             gps_lon=excluded.gps_lon,
                             czas_przechwycenia=excluded.czas_przechwycenia,
+                            czas_zbanowania=excluded.czas_zbanowania,
                             last_attacked_at=excluded.last_attacked_at,
                             liczba_atakow_deauth=excluded.liczba_atakow_deauth,
                             liczba_atakow_pmkid=excluded.liczba_atakow_pmkid,
@@ -272,7 +287,7 @@ class Database:
                             last_modified=excluded.last_modified
                     ''', (
                         data['bssid'], data['essid'], data['vendor'], data['first_seen'], data['last_seen'],
-                        data['gps_lat'], data['gps_lon'], data['czas_przechwycenia'],
+                        data['gps_lat'], data['gps_lon'], data['czas_przechwycenia'], data.get('czas_zbanowania'),
                         data['last_attacked_at'], data['liczba_atakow_deauth'], data['liczba_atakow_pmkid'],
                         data.get('liczba_atakow_pixiedust', 0), data['status'], data.get('encryption'), data.get('last_modified')
                     ))
@@ -450,6 +465,9 @@ class Database:
         if not active_list:
             return []
             
+        async with self.lock:
+            pending_copy = {bssid: dict(ap) for bssid, ap in self.pending_updates.items()}
+            
         async with aiosqlite.connect(self.db_path) as conn:
             conn.row_factory = aiosqlite.Row
             bssids = [ap['bssid'] for ap in active_list]
@@ -466,14 +484,29 @@ class Database:
                 pass
                 
             for ap in active_list:
-                status_info = db_status.get(ap['bssid'], {})
-                ap['status'] = status_info.get('status', 'nowy')
-                ap['liczba_atakow_deauth'] = status_info.get('liczba_atakow_deauth', 0)
-                ap['liczba_atakow_pmkid'] = status_info.get('liczba_atakow_pmkid', 0)
-                ap['liczba_atakow_pixiedust'] = status_info.get('liczba_atakow_pixiedust', 0)
+                pending = pending_copy.get(ap['bssid'])
+                if pending:
+                    ap['status'] = pending.get('status', 'nowy')
+                    ap['liczba_atakow_deauth'] = pending.get('liczba_atakow_deauth', 0)
+                    ap['liczba_atakow_pmkid'] = pending.get('liczba_atakow_pmkid', 0)
+                    ap['liczba_atakow_pixiedust'] = pending.get('liczba_atakow_pixiedust', 0)
+                    last_attack = pending.get('last_attacked_at', 0.0) or 0.0
+                else:
+                    status_info = db_status.get(ap['bssid'], {})
+                    ap['status'] = status_info.get('status', 'nowy')
+                    ap['liczba_atakow_deauth'] = status_info.get('liczba_atakow_deauth', 0)
+                    ap['liczba_atakow_pmkid'] = status_info.get('liczba_atakow_pmkid', 0)
+                    ap['liczba_atakow_pixiedust'] = status_info.get('liczba_atakow_pixiedust', 0)
+                    last_attack = status_info.get('last_attacked_at', 0.0) or 0.0
                 
+                # Auto-upgrade statusu na time_banned, jeśli sieć ma już >=100 deauth i >=3 pmkid
+                if 'przechwycono' not in str(ap['status']) and ap['status'] != 'zbanowany':
+                    if ap['liczba_atakow_deauth'] >= 100 and ap['liczba_atakow_pmkid'] >= 3:
+                        ap['status'] = 'time_banned'
+                        asyncio.create_task(self.update_status(ap['bssid'], 'time_banned'))
+
                 # Pomiń obliczanie Brain Score dla zbanowanych sieci
-                if ap['status'] == 'zbanowany':
+                if ap['status'] in ('zbanowany', 'time_banned'):
                     ap['score'] = '-'
                 else:
                     # Dynamic Brain Score Calculation matching brain.py
@@ -481,7 +514,6 @@ class Database:
                     capped_failures = min(failures, 10)
                     bonus_nowej_sieci = 20 if failures == 0 else 0
                     
-                    last_attack = status_info.get('last_attacked_at', 0.0) or 0.0
                     time_since_attack = time.time() - last_attack
                     cooldown_penalty = 0.0
                     if last_attack > 0.0 and time_since_attack < 180.0:
