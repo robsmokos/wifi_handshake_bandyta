@@ -10,6 +10,7 @@ files_to_upload = [
     ('web.py', f'{remote_base}/web.py'),
     ('main.py', f'{remote_base}/main.py'),
     ('core/database.py', f'{remote_base}/core/database.py'),
+    ('core/display.py', f'{remote_base}/core/display.py'),
     ('migrate_db.py', f'{remote_base}/migrate_db.py'),
 ]
 

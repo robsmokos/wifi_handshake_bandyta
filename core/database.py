@@ -508,3 +508,23 @@ class Database:
                 
             active_list.sort(key=lambda x: x['rssi'], reverse=True)
             return active_list
+
+    async def get_captured_today(self):
+        """Zwraca liczbę sieci przechwyconych dzisiaj."""
+        try:
+            today_str = datetime.now().strftime("%Y-%m-%d") + " 00:00:00"
+            async with aiosqlite.connect(self.db_path) as conn:
+                query = "SELECT COUNT(*) FROM handshakes WHERE status IN ('przechwycono', 'pmkid_przechwycono') AND czas_przechwycenia >= ?"
+                async with conn.execute(query, (today_str,)) as cursor:
+                    db_captured_today = (await cursor.fetchone())[0]
+            
+            # Dodaj z pending_updates
+            async with self.lock:
+                for bssid, ap in self.pending_updates.items():
+                    if ap.get('status') in ('przechwycono', 'pmkid_przechwycono'):
+                        if ap.get('czas_przechwycenia') and ap['czas_przechwycenia'] >= today_str:
+                            db_captured_today += 1
+            return db_captured_today
+        except Exception:
+            return 0
+

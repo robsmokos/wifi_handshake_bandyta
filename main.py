@@ -7,6 +7,7 @@ import sys
 import time
 from aiohttp import web
 from web import WebServer
+from core.display import epaper_display_updater
 
 async def status_bar(db, event_queue, attack_queue, state):
     """Odświeża statystyki i rysuje TUI (Text User Interface) w dolnej części ekranu."""
@@ -77,6 +78,13 @@ async def start_web_server(db, shared_state):
     app.router.add_post('/api/ban', ws.ban_network)
     app.router.add_post('/api/unban', ws.unban_network)
     app.router.add_post('/api/oneshot', ws.run_oneshot)
+    # Threat Intel — CVE Lookup (NVD API)
+    app.router.add_get('/api/cve', ws.get_cve)
+    app.router.add_get('/api/cve/top_vendors', ws.get_cve_top_vendors)
+    app.router.add_get('/api/cve/cache', ws.get_cve_cache_stats)
+    # Eksport danych
+    app.router.add_get('/api/export/kml', ws.export_kml)
+    app.router.add_get('/api/export/report', ws.export_report)
     # Obsługa statycznego pobierania handshake'ów z folderu handshakes
     app.router.add_static('/handshakes/', path='handshakes', name='handshakes')
     
@@ -108,7 +116,8 @@ async def main():
         asyncio.create_task(api.event_stream_listener()),
         asyncio.create_task(brain.process_events()),
         asyncio.create_task(executor.run()),
-        asyncio.create_task(status_bar(db, event_queue, attack_queue, shared_state))
+        asyncio.create_task(status_bar(db, event_queue, attack_queue, shared_state)),
+        asyncio.create_task(epaper_display_updater(db, shared_state))
     ]
 
     # Zatrzymanie głównego wątku, aż zadania (nigdy) nie wygasną

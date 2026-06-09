@@ -1,4 +1,5 @@
 from aiohttp import web
+import asyncio
 import aiosqlite
 import json
 import os
@@ -9,12 +10,14 @@ import base64
 import matplotlib
 matplotlib.use('Agg')
 from matplotlib.figure import Figure
+from core.threat_intel import ThreatIntel
 
 class WebServer:
     def __init__(self, db, shared_state=None):
         self.db = db
         self.db_path = db.db_path
         self.shared_state = shared_state or {"action": "Skanowanie..."}
+        self.threat_intel = ThreatIntel()
 
     async def get_index(self, request):
         html_content = """<!DOCTYPE html>
@@ -227,6 +230,7 @@ class WebServer:
         <button id="btn-view-database" onclick="switchView('database')">[ BAZA DANYCH ]</button>
         <button id="btn-view-banned" onclick="switchView('banned')">[ ZBANOWANE ]</button>
         <button id="btn-view-stats" onclick="switchView('stats')">[ STATYSTYKI ]</button>
+        <button id="btn-view-cve" onclick="switchView('cve')">[ THREAT INTEL ]</button>
         
         <input type="text" id="search-bar" placeholder="Szukaj (BSSID, ESSID)..." style="flex-grow: 1;">
         
@@ -245,6 +249,12 @@ class WebServer:
             <span id="page-info" style="color: #ffffff; font-weight: bold;">Str. 1</span>
             <button id="btn-next-page" onclick="changePage(1)">&#8594;</button>
         </div>
+    </div>
+
+    <!-- Panel akcji dla bazy danych (KML, Raport) -->
+    <div id="db-actions-panel" style="display: none; margin-bottom: 15px; gap: 10px; flex-wrap: wrap;">
+        <button onclick="window.open('/api/export/kml', '_blank')" style="border-color: #00ff00; color: #00ff00;">[ 🗺️ EKSPORT MAPY KML ]</button>
+        <button onclick="window.open('/api/export/report', '_blank')" style="border-color: #ffaa00; color: #ffaa00;">[ 📄 POBIERZ RAPORT BEZPIECZEŃSTWA (.MD) ]</button>
     </div>
 
     <table id="networks-table">
@@ -272,6 +282,19 @@ class WebServer:
                 <div id="chart-vendors-loading" style="color: #666; font-family: monospace;">Ładowanie danych...</div>
             </div>
         </div>
+    </div>
+
+    <!-- Widok Threat Intel / CVE -->
+    <div id="cve-view" style="display: none; padding: 10px;">
+        <div style="display: flex; gap: 10px; margin-bottom: 15px; flex-wrap: wrap; align-items: center;">
+            <input type="text" id="cve-vendor-input" placeholder="Wpisz vendor (np. tp-link, netgear, cisco)..."
+                style="flex-grow: 1; min-width: 200px;"
+                onkeydown="if(event.key==='Enter') lookupCve()">
+            <button onclick="lookupCve()" id="cve-search-btn">[ SZUKAJ CVE ]</button>
+            <button onclick="lookupTopVendors()" id="cve-top-btn" title="Pobierz CVE dla wszystkich vendorów z bazy">[ TOP VENDORY Z BAZY ]</button>
+        </div>
+        <div id="cve-status" style="color: #ffaa00; margin-bottom: 10px; min-height: 1.2em;"></div>
+        <div id="cve-results"></div>
     </div>
 
     <script>
@@ -316,19 +339,25 @@ class WebServer:
             document.getElementById('btn-view-database').classList.toggle('active', view === 'database');
             document.getElementById('btn-view-banned').classList.toggle('active', view === 'banned');
             document.getElementById('btn-view-stats').classList.toggle('active', view === 'stats');
+            document.getElementById('btn-view-cve').classList.toggle('active', view === 'cve');
             
             const paginationEl = document.getElementById('pagination');
             if (paginationEl) paginationEl.style.display = view === 'database' ? 'flex' : 'none';
             
+            const dbActionsEl = document.getElementById('db-actions-panel');
+            if (dbActionsEl) dbActionsEl.style.display = view === 'database' ? 'flex' : 'none';
+            
             // Pokaż/ukryj odpowiednie elementy
-            document.getElementById('networks-table').style.display = view === 'stats' ? 'none' : 'table';
-            searchBar.style.display = view === 'stats' ? 'none' : 'block';
-            statusFilter.style.display = (view === 'stats' || view === 'banned') ? 'none' : 'block';
+            const isTableView = (view !== 'stats' && view !== 'cve');
+            document.getElementById('networks-table').style.display = isTableView ? 'table' : 'none';
+            searchBar.style.display = isTableView ? 'block' : 'none';
+            statusFilter.style.display = (view === 'stats' || view === 'banned' || view === 'cve') ? 'none' : 'block';
             
             const filterTodayEl = document.getElementById('filter-today-container');
             if (filterTodayEl) filterTodayEl.style.display = view === 'database' ? 'flex' : 'none';
             
             document.getElementById('stats-view').style.display = view === 'stats' ? 'block' : 'none';
+            document.getElementById('cve-view').style.display = view === 'cve' ? 'block' : 'none';
             
             if (view === 'active') {
                 viewTitle.innerText = 'Aktywne sieci (w locie)';
@@ -342,6 +371,8 @@ class WebServer:
             } else if (view === 'stats') {
                 viewTitle.innerText = 'Statystyki i Wykresy';
                 fetchDashboardStats();
+            } else if (view === 'cve') {
+                viewTitle.innerText = 'Threat Intelligence — CVE Lookup';
             }
         }
         
@@ -370,7 +401,9 @@ class WebServer:
                 document.getElementById('modal-title').innerText = `Szczegóły Sieci: ${data.essid || '<ukryty>'}`;
                 
                 let html = '';
+                const skipKeys = ['pcap_exists', 'hash_exists', 'pcap_filename', 'hash_filename'];
                 for (const [key, value] of Object.entries(data)) {
+                    if (skipKeys.includes(key)) continue;
                     let displayValue = value !== null ? value : '-';
                     
                     // Formatowanie czasu UNIX (last_attacked_at jest w sekundach)
@@ -384,9 +417,31 @@ class WebServer:
                     
                     html += `<tr><th style="color: #1f940b;">${key.toUpperCase()}</th><td>${displayValue}</td></tr>`;
                 }
+
+                // Sekcja pobierania plików handshake
+                let handshakeHtml = '';
+                if (data.pcap_exists || data.hash_exists) {
+                    handshakeHtml += `<tr><th style="color: #1f940b;">PLIKI HANDSHAKE</th><td>`;
+                    if (data.pcap_exists) {
+                        handshakeHtml += `<a href="/handshakes/${data.pcap_filename}" download style="color: #00ff00; font-weight: bold; text-decoration: underline; margin-right: 15px;">[ POBIERZ PCAP ]</a>`;
+                    }
+                    if (data.hash_exists) {
+                        handshakeHtml += `<a href="/handshakes/${data.hash_filename}" download style="color: #00ff00; font-weight: bold; text-decoration: underline;">[ POBIERZ HC22000 ]</a>`;
+                    }
+                    handshakeHtml += `</td></tr>`;
+                } else {
+                    handshakeHtml += `<tr><th style="color: #1f940b;">PLIKI HANDSHAKE</th><td style="color: #666;">Brak (nie przechwycono)</td></tr>`;
+                }
+                html += handshakeHtml;
                 
                 document.getElementById('modal-body').innerHTML = html;
-                document.getElementById('modal-actions').innerHTML = `<button onclick="deleteNetwork('${data.bssid}')" style="background-color: #000; color: #ff3333; border: none; padding: 6px 12px; font-weight: bold; cursor: pointer; transition: all 0.2s; font-family: monospace;" onmouseover="this.style.backgroundColor='#ff3333'; this.style.color='#000';" onmouseout="this.style.backgroundColor='#000'; this.style.color='#ff3333';">USUŃ SIEĆ Z BAZY</button>`;
+                let actionsHtml = '';
+                if (data.vendor && data.vendor !== 'UNKNOWN') {
+                    const safeVendor = data.vendor.replace(/'/g, "\\'");
+                    actionsHtml += `<button onclick="document.getElementById('apModal').style.display='none'; lookupCveForVendor('${safeVendor}')" style="background-color: #000; color: #ffaa00; border: 1px solid #ffaa00; padding: 6px 12px; font-weight: bold; cursor: pointer; transition: all 0.2s; font-family: monospace; margin-right: 10px;" onmouseover="this.style.backgroundColor='#ffaa00'; this.style.color='#000';" onmouseout="this.style.backgroundColor='#000'; this.style.color='#ffaa00';">SPRAWDŹ CVE</button>`;
+                }
+                actionsHtml += `<button onclick="deleteNetwork('${data.bssid}')" style="background-color: #000; color: #ff3333; border: none; padding: 6px 12px; font-weight: bold; cursor: pointer; transition: all 0.2s; font-family: monospace;" onmouseover="this.style.backgroundColor='#ff3333'; this.style.color='#000';" onmouseout="this.style.backgroundColor='#000'; this.style.color='#ff3333';">USUŃ SIEĆ Z BAZY</button>`;
+                document.getElementById('modal-actions').innerHTML = actionsHtml;
                 document.getElementById('apModal').style.display = 'block';
             } catch (err) {
                 console.error(err);
@@ -735,6 +790,112 @@ class WebServer:
             }
         }, 150);
 
+        // ========================
+        // THREAT INTEL / CVE LOOKUP
+        // ========================
+
+        const severityColor = { CRITICAL: '#ff0000', HIGH: '#ff6600', MEDIUM: '#ffaa00', LOW: '#aaffaa', UNKNOWN: '#666666' };
+        const severityIcon  = { CRITICAL: '🔴', HIGH: '🟠', MEDIUM: '🟡', LOW: '🟢', UNKNOWN: '⚪' };
+
+        function renderCveResults(vendor, cves) {
+            const container = document.getElementById('cve-results');
+            if (!cves || cves.length === 0) {
+                container.innerHTML += `<div style="color:#666; margin-bottom:20px;">⚠️ Brak CVE dla: <strong>${vendor}</strong> (lub vendor nieznany w NVD)</div>`;
+                return;
+            }
+            let html = `<div style="margin-bottom: 20px;">`;
+            html += `<h3 style="color: #ffaa00; border-bottom: 1px solid #333; padding-bottom: 5px; margin-bottom: 10px;">📡 ${vendor.toUpperCase()} — ${cves.length} CVE</h3>`;
+            for (const cve of cves) {
+                const sColor = severityColor[cve.severity] || '#666';
+                const sIcon  = severityIcon[cve.severity] || '⚪';
+                const score  = cve.cvss_score !== null ? cve.cvss_score.toFixed(1) : '?';
+                html += `
+                <div style="border-left: 3px solid ${sColor}; padding: 8px 12px; margin-bottom: 8px; background: rgba(0,0,0,0.3);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
+                        <span style="font-weight: bold;">
+                            <a href="${cve.url}" target="_blank" style="color: ${sColor}; text-decoration: none;">${cve.id}</a>
+                        </span>
+                        <span style="white-space: nowrap;">
+                            ${sIcon} <span style="color: ${sColor}; font-weight: bold;">${cve.severity}</span>
+                            &nbsp;|&nbsp; CVSS: <span style="color: #fff; font-weight: bold;">${score}</span>
+                            &nbsp;|&nbsp; <span style="color: #666;">${cve.published}</span>
+                        </span>
+                    </div>
+                    <div style="color: #cccccc; font-size: 0.85rem; margin-top: 5px; line-height: 1.4;">${cve.description}</div>
+                </div>`;
+            }
+            html += `</div>`;
+            container.innerHTML += html;
+        }
+
+        async function lookupCve() {
+            const vendor = document.getElementById('cve-vendor-input').value.trim();
+            if (!vendor) return;
+            const statusEl = document.getElementById('cve-status');
+            const btn = document.getElementById('cve-search-btn');
+            document.getElementById('cve-results').innerHTML = '';
+            statusEl.textContent = `⏳ Pobieranie CVE dla "${vendor}" z NVD API...`;
+            btn.disabled = true;
+            try {
+                const res = await fetch(`/api/cve?vendor=${encodeURIComponent(vendor)}`);
+                const data = await res.json();
+                if (data.error) {
+                    statusEl.textContent = `❌ Błąd: ${data.error}`;
+                } else {
+                    const count = (data.cves || []).length;
+                    statusEl.textContent = count > 0
+                        ? `✅ Znaleziono ${count} CVE dla "${data.vendor_key || vendor}" (cache: ${data.from_cache ? 'TAK' : 'NIE'})`
+                        : `ℹ️ Brak CVE dla "${vendor}" w NVD`;
+                    renderCveResults(vendor, data.cves);
+                }
+            } catch(e) {
+                statusEl.textContent = `❌ Błąd połączenia: ${e.message}`;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        async function lookupCveForVendor(vendor) {
+            document.getElementById('cve-vendor-input').value = vendor;
+            switchView('cve');
+            await lookupCve();
+        }
+
+        async function lookupTopVendors() {
+            const statusEl = document.getElementById('cve-status');
+            const btn = document.getElementById('cve-top-btn');
+            document.getElementById('cve-results').innerHTML = '';
+            statusEl.textContent = '⏳ Pobieranie listy vendorów z bazy...';
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/cve/top_vendors');
+                const data = await res.json();
+                if (data.error) {
+                    statusEl.textContent = `❌ Błąd: ${data.error}`;
+                    return;
+                }
+                const vendors = data.vendors || [];
+                if (vendors.length === 0) {
+                    statusEl.textContent = 'ℹ️ Brak vendorów z obsługą CVE w bazie danych.';
+                    return;
+                }
+                statusEl.textContent = `⏳ Pobieranie CVE dla ${vendors.length} vendorów...`;
+                for (const v of vendors) {
+                    try {
+                        const r = await fetch(`/api/cve?vendor=${encodeURIComponent(v)}`);
+                        const d = await r.json();
+                        renderCveResults(v, d.cves || []);
+                    } catch(e) { /* ignoruj błędy pojedynczego vendora */ }
+                    await new Promise(r => setTimeout(r, 800)); // Rate limit spacing
+                }
+                statusEl.textContent = `✅ Gotowe — wyniki dla ${vendors.length} vendorów.`;
+            } catch(e) {
+                statusEl.textContent = `❌ Błąd: ${e.message}`;
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
         async function fetchDashboardStats() {
             if (currentView !== 'stats') return;
             try {
@@ -969,7 +1130,21 @@ class WebServer:
             async with conn.execute("SELECT * FROM handshakes WHERE bssid = ?", (bssid,)) as cursor:
                 row = await cursor.fetchone()
                 if row:
-                    return web.json_response(dict(row))
+                    ap = dict(row)
+                    bssid_file_name = ap['bssid'].replace(":", "-")
+                    essid_raw = ap.get('essid') or 'ukryta'
+                    essid_safe = "".join([c for c in str(essid_raw) if c.isalnum() or c in ('_', '-')]).strip()
+                    if not essid_safe:
+                        essid_safe = "ukryta"
+                    
+                    pcap_name = f"{essid_safe}_{bssid_file_name}.pcap"
+                    hash_name = f"{essid_safe}_{bssid_file_name}.hc22000"
+                    
+                    ap['pcap_exists'] = os.path.exists(os.path.join('handshakes', pcap_name))
+                    ap['hash_exists'] = os.path.exists(os.path.join('handshakes', hash_name))
+                    ap['pcap_filename'] = pcap_name
+                    ap['hash_filename'] = hash_name
+                    return web.json_response(ap)
                 else:
                     return web.json_response({"error": "Network not found"})
 
@@ -1113,5 +1288,216 @@ class WebServer:
             if self.shared_state is not None:
                 self.shared_state['action'] = f'[WPS PIXIE DUST] Cel: {bssid}'
             return web.json_response({'status': 'started', 'pid': proc.pid, 'bssid': bssid})
+        except Exception as e:
+            return web.json_response({'error': str(e)}, status=500)
+
+    # ======================================================================
+    # THREAT INTEL — CVE LOOKUP ENDPOINTS
+    # ======================================================================
+
+    async def get_cve(self, request):
+        """
+        GET /api/cve?vendor=tp-link
+        Zwraca listę CVE dla podanego vendora z NVD API (z cache 6h).
+        """
+        vendor_raw = request.query.get('vendor', '').strip()
+        if not vendor_raw:
+            return web.json_response({'error': 'Brak parametru vendor'}, status=400)
+
+        # Normalizacja vendora
+        vendor_key = self.threat_intel._normalize_vendor(vendor_raw)
+        if not vendor_key:
+            return web.json_response({
+                'vendor_raw': vendor_raw,
+                'vendor_key': None,
+                'from_cache': False,
+                'cves': [],
+                'note': 'Vendor nierozpoznany — spróbuj innej nazwy'
+            })
+
+        # Sprawdź czy dane są w cache (do oznaczenia w odpowiedzi)
+        was_cached = self.threat_intel._is_cache_fresh(vendor_key)
+
+        try:
+            cves = await asyncio.wait_for(
+                self.threat_intel.get_cves(vendor_raw),
+                timeout=20
+            )
+        except asyncio.TimeoutError:
+            return web.json_response({
+                'error': 'Timeout — NVD API nie odpowiada. Spróbuj ponownie za chwilę.'
+            }, status=504)
+        except Exception as e:
+            return web.json_response({'error': str(e)}, status=500)
+
+        return web.json_response({
+            'vendor_raw': vendor_raw,
+            'vendor_key': vendor_key,
+            'from_cache': was_cached,
+            'count': len(cves),
+            'cves': cves
+        })
+
+    async def get_cve_top_vendors(self, request):
+        """
+        GET /api/cve/top_vendors
+        Zwraca listę unikalnych vendorów z bazy danych, które są obsługiwane
+        przez moduł ThreatIntel (mają mapowanie w VENDOR_KEYWORD_MAP).
+        """
+        try:
+            async with aiosqlite.connect(self.db_path) as conn:
+                async with conn.execute(
+                    "SELECT DISTINCT vendor FROM handshakes "
+                    "WHERE vendor IS NOT NULL AND vendor != '' "
+                    "ORDER BY vendor ASC"
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                    all_vendors = [row[0] for row in rows]
+
+            # Filtruj tylko te które ThreatIntel potrafi obsłużyć
+            supported = []
+            seen_keys = set()
+            for vendor in all_vendors:
+                key = self.threat_intel._normalize_vendor(vendor)
+                if key and key not in seen_keys:
+                    supported.append(vendor)   # oryginalny string vendora
+                    seen_keys.add(key)
+
+            return web.json_response({
+                'total_in_db': len(all_vendors),
+                'supported_count': len(supported),
+                'vendors': supported
+            })
+        except Exception as e:
+            return web.json_response({'error': str(e)}, status=500)
+
+    async def get_cve_cache_stats(self, request):
+        """GET /api/cve/cache — statystyki cache ThreatIntel (debug)."""
+        return web.json_response(self.threat_intel.get_cache_stats())
+
+    async def export_kml(self, request):
+        """
+        GET /api/export/kml
+        Eksportuje punkty sieci z bazy (te z GPS) do pliku KML.
+        """
+        try:
+            async with aiosqlite.connect(self.db_path) as conn:
+                conn.row_factory = aiosqlite.Row
+                async with conn.execute(
+                    "SELECT bssid, essid, vendor, gps_lat, gps_lon, status FROM handshakes "
+                    "WHERE gps_lat IS NOT NULL AND gps_lon IS NOT NULL "
+                    "AND gps_lat != 0.0 AND gps_lon != 0.0"
+                ) as cursor:
+                    rows = await cursor.fetchall()
+            
+            kml_parts = [
+                '<?xml version="1.0" encoding="UTF-8"?>',
+                '<kml xmlns="http://www.opengis.net/kml/2.2">',
+                '  <Document>',
+                '    <name>BetterCup Wi-Fi Map</name>',
+                '    <description>Punkty dostępowe z GPS zebrane przez BetterCup</description>'
+            ]
+            
+            for row in rows:
+                essid = row['essid'] or '<ukryte>'
+                # Escape xml characters
+                essid_xml = essid.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                vendor_xml = (row['vendor'] or 'UNKNOWN').replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                description = f"BSSID: {row['bssid']}\nProducent: {vendor_xml}\nStatus: {row['status']}"
+                description_xml = description.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('\n', '&#10;')
+                
+                kml_parts.append('    <Placemark>')
+                kml_parts.append(f'      <name>{essid_xml}</name>')
+                kml_parts.append(f'      <description>{description_xml}</description>')
+                kml_parts.append('      <Point>')
+                kml_parts.append(f'        <coordinates>{row["gps_lon"]},{row["gps_lat"]},0</coordinates>')
+                kml_parts.append('      </Point>')
+                kml_parts.append('    </Placemark>')
+                
+            kml_parts.append('  </Document>')
+            kml_parts.append('</kml>')
+            
+            kml_content = "\n".join(kml_parts)
+            
+            headers = {
+                'Content-Disposition': 'attachment; filename="bettercup_map.kml"',
+                'Content-Type': 'application/vnd.google-earth.kml+xml'
+            }
+            return web.Response(text=kml_content, headers=headers)
+        except Exception as e:
+            return web.json_response({'error': str(e)}, status=500)
+
+    async def export_report(self, request):
+        """
+        GET /api/export/report
+        Generuje raport bezpieczeństwa (.md) o wszystkich sieciach w bazie z informacjami o CVE.
+        """
+        try:
+            async with aiosqlite.connect(self.db_path) as conn:
+                conn.row_factory = aiosqlite.Row
+                async with conn.execute(
+                    "SELECT bssid, essid, vendor, status, liczba_atakow_deauth, liczba_atakow_pmkid, liczba_atakow_pixiedust, czas_przechwycenia, first_seen FROM handshakes "
+                    "ORDER BY status DESC, first_seen DESC"
+                ) as cursor:
+                    rows = await cursor.fetchall()
+            
+            report_lines = [
+                "# RAPORT BEZPIECZEŃSTWA BETTERCUP WI-FI",
+                f"Wygenerowano: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                "",
+                "## Podsumowanie Statystyk",
+                f"- **Wszystkich sieci w bazie**: {len(rows)}",
+                f"- **Przechwyconych handshake'ów**: {sum(1 for r in rows if 'przechwycono' in r['status'])}",
+                f"- **Zbanowanych sieci**: {sum(1 for r in rows if r['status'] == 'zbanowany')}",
+                "",
+                "## Wykryte Sieci i Podatności",
+                "",
+                "| ID | ESSID | BSSID | Producent | Status | Ataki (D/P/W) | Data dodania |",
+                "|----|-------|-------|-----------|--------|---------------|--------------|"
+            ]
+            
+            # Wypełnienie tabeli
+            idx = 1
+            for row in rows:
+                essid = row['essid'] or '<ukryty>'
+                vendor = row['vendor'] or 'UNKNOWN'
+                status_icon = "✅ CAPTURED" if 'przechwycono' in row['status'] else ("🚫 BANNED" if row['status'] == 'zbanowany' else "📡 NEW")
+                atks = f"{row['liczba_atakow_deauth']}/{row['liczba_atakow_pmkid']}/{row['liczba_atakow_pixiedust']}"
+                report_lines.append(f"| {idx} | {essid} | {row['bssid']} | {vendor} | {status_icon} | {atks} | {row['first_seen']} |")
+                idx += 1
+                
+            # Sekcja z CVE dla vendorów
+            report_lines.append("")
+            report_lines.append("## Analiza Zagrożeń Threat Intel (CVE)")
+            report_lines.append("Poniżej znajdują się znane luki bezpieczeństwa (z NVD API) dla producentów routerów wykrytych w Twoim otoczeniu:")
+            report_lines.append("")
+            
+            unique_vendors = set(row['vendor'] for row in rows if row['vendor'] and row['vendor'] != 'UNKNOWN')
+            
+            has_any_cve = False
+            for vendor in sorted(unique_vendors):
+                normalized = self.threat_intel._normalize_vendor(vendor)
+                if normalized:
+                    # Spróbuj pobrać z cache modułu (lub live)
+                    cves = await self.threat_intel.get_cves(vendor)
+                    if cves:
+                        has_any_cve = True
+                        report_lines.append(f"### 📡 {vendor} ({normalized}) — {len(cves)} CVE")
+                        for cve in cves:
+                            score = cve['cvss_score'] if cve['cvss_score'] is not None else '?'
+                            report_lines.append(f"- **{cve['id']}** (CVSS: {score} | `{cve['severity']}`): {cve['description']}")
+                            report_lines.append(f"  *Więcej: {cve['url']}*")
+                        report_lines.append("")
+            
+            if not has_any_cve:
+                report_lines.append("*Nie wczytano żadnych CVE z cache (odwiedź zakładkę Threat Intel w panelu, aby pobrać dane o vendorach).*")
+                
+            report_content = "\n".join(report_lines)
+            
+            headers = {
+                'Content-Disposition': 'attachment; filename="bettercup_security_report.md"',
+                'Content-Type': 'text/markdown; charset=utf-8'
+            }
+            return web.Response(text=report_content, headers=headers)
         except Exception as e:
             return web.json_response({'error': str(e)}, status=500)

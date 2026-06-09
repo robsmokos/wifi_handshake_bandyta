@@ -12,6 +12,7 @@ local_files = [
     (r'c:\DATA\ROB\AI\Programista\bettercup\core\bettercap_api.py', '/home/kali/skanerb/core/bettercap_api.py'),
     (r'c:\DATA\ROB\AI\Programista\bettercup\core\brain.py', '/home/kali/skanerb/core/brain.py'),
     (r'c:\DATA\ROB\AI\Programista\bettercup\core\database.py', '/home/kali/skanerb/core/database.py'),
+    (r'c:\DATA\ROB\AI\Programista\bettercup\core\display.py', '/home/kali/skanerb/core/display.py'),
     (r'c:\DATA\ROB\AI\Programista\bettercup\migrate_db.py', '/home/kali/skanerb/migrate_db.py'),
     (r'c:\DATA\ROB\AI\Programista\bettercup\skrypt_startowy.sh', '/home/kali/skanerb/skrypt_startowy.sh')
 ]
