@@ -235,7 +235,8 @@ class WebServer:
         <button id="btn-view-banned" onclick="switchView('banned')">[ ZBANOWANE ]</button>
         <button id="btn-view-stats" onclick="switchView('stats')">[ STATYSTYKI ]</button>
         <button id="btn-view-cve" onclick="switchView('cve')">[ THREAT INTEL ]</button>
-        <button id="btn-toggle-eink" onclick="toggleEink()">[ ZATRZYMAJ E-INK ]</button>
+        <button id="btn-toggle-eink" onclick="toggleEink()">[ EINK DOWN ]</button>
+        <button id="btn-reboot" onclick="rebootSystem()">[ RELOAD ]</button>
         
         <input type="text" id="search-bar" placeholder="Szukaj (BSSID, ESSID)..." style="flex-grow: 1;">
         
@@ -526,15 +527,33 @@ class WebServer:
             }
         }
 
+        async function rebootSystem() {
+            if (!confirm('⚠️ Czy na pewno chcesz ZRESTARTOWAĆ całe urządzenie (reboot)? Skanowanie zostanie przerwane.')) {
+                return;
+            }
+            try {
+                const res = await fetch('/api/reboot', { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    alert('🔄 Urządzenie restartuje się. Utracisz połączenie na około 1-2 minuty.');
+                } else {
+                    alert('Błąd: ' + data.error);
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Błąd połączenia podczas próby restartu.');
+            }
+        }
+
         function updateEinkButtonState(paused) {
             const btn = document.getElementById('btn-toggle-eink');
             if (btn) {
                 if (paused) {
-                    btn.innerText = '[ WZNÓW E-INK ]';
+                    btn.innerText = '[ EINK UP ]';
                     btn.style.borderColor = '#ffaa00';
                     btn.style.color = '#ffaa00';
                 } else {
-                    btn.innerText = '[ ZATRZYMAJ E-INK ]';
+                    btn.innerText = '[ EINK DOWN ]';
                     btn.style.borderColor = '#00ff00';
                     btn.style.color = '#00ff00';
                 }
@@ -1257,6 +1276,15 @@ class WebServer:
         new_state = not paused
         self.shared_state['pause_eink'] = new_state
         return web.json_response({"status": "ok", "paused": new_state})
+
+    async def reboot_system(self, request):
+        """Uruchamia reboot systemu (płytki Raspberry Pi)."""
+        async def do_reboot():
+            await asyncio.sleep(1.0)
+            os.system("sudo reboot")
+            
+        asyncio.create_task(do_reboot())
+        return web.json_response({"status": "ok", "message": "Reboot initiated"})
 
     def _generate_plot_base64(self, fig):
         buf = io.BytesIO()

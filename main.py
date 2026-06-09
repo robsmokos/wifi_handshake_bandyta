@@ -94,6 +94,7 @@ async def start_web_server(db, shared_state):
     app.router.add_post('/api/unban', ws.unban_network)
     app.router.add_post('/api/oneshot', ws.run_oneshot)
     app.router.add_post('/api/toggle_eink', ws.toggle_eink)
+    app.router.add_post('/api/reboot', ws.reboot_system)
     # Threat Intel — CVE Lookup (NVD API)
     app.router.add_get('/api/cve', ws.get_cve)
     app.router.add_get('/api/cve/top_vendors', ws.get_cve_top_vendors)
